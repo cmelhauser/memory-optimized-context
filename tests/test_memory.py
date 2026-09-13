@@ -791,3 +791,131 @@ def test_vector_rank_stdlib_and_numpy_agree(m, monkeypatch):
     slow = [r["id"] for r in m.vector_rank(q, rows, top=2)]
     assert fast == slow == [0, 2]
     assert m.cosine(m.array("f", [1, 0]).tobytes(), m.array("f", [1, 0, 0]).tobytes()) == 0.0
+
+
+# ------------------------------------------------------------------ Reflector failures
+
+
+def failing_llm(calls, answered):
+    """tracing_llm for the first `answered` calls, then no answer at all, as under a usage limit."""
+    trace = tracing_llm(calls)
+    return lambda prompt, system="", max_tokens=0: trace(prompt) if len(calls) < answered else None
+
+
+def test_backfill_stops_at_a_failed_window_and_the_next_run_resumes_there(m, tmp_path, monkeypatch):
+    """Windows reflected before the failure keep their lessons and move the cursor; the rest is offered
+    again on the next run, and no turn is sent twice."""
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli", transcript_chars=200))
+    d = tmp_path / "projects" / "-home-me-GitHub-p"
+    d.mkdir(parents=True)
+    transcript(d / "s.jsonl", [("user" if i % 2 == 0 else "assistant", f"marker{i:03d} " + "x" * 40) for i in range(40)],
+               cwd="/home/me/GitHub/p")
+    calls = []
+    monkeypatch.setattr(m, "llm", failing_llm(calls, 3))
+    with m.db() as c:
+        with pytest.raises(m.ReflectorFailed) as e:
+            m.learn_transcripts(c, tmp_path / "projects")
+        assert len(calls) == 3 and len(e.value.new) == 3
+        assert 0 < int(c.execute("SELECT cursor FROM sources").fetchone()[0]) < (d / "s.jsonl").stat().st_size
+        monkeypatch.setattr(m, "llm", tracing_llm(calls))
+        m.learn_transcripts(c, tmp_path / "projects")
+    sent = [p.split("<conversation>\n", 1)[1] for p in calls]
+    assert all(sum(f"marker{i:03d}" in s for s in sent) == 1 for i in range(40))
+
+
+def test_learn_stops_on_a_failed_reflector_keeps_its_progress_and_resumes(m, tmp_path, monkeypatch):
+    """Commits reflected before the failure stay; a doc whose prose was not reflected keeps its tagged
+    line, counted once, and gets its prose on the rerun."""
+    repo = git_repo(tmp_path / "alpha", "alpha")
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    calls = []
+    monkeypatch.setattr(m, "llm", failing_llm(calls, 1))          # the commits are answered, the docs are not
+    m.main.__globals__["sys"].argv = ["memory", "learn", "--repo", str(repo)]
+    with pytest.raises(SystemExit) as e:
+        m.main()
+    assert "stopped early" in str(e.value.code)
+    assert "lesson from git history of alpha" in (m.COMPILED / "projects" / "alpha.md").read_text()
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    m.main()
+    with m.db() as c:
+        votes = {r["text"]: r["votes"] for r in c.execute("SELECT text, votes FROM lessons")}
+    assert votes["never use --force"] == 1 and "lesson from documentation of alpha" in votes
+    assert sum("[git history of alpha]" in p for p in calls) == 1   # the commit window was not reflected again
+
+
+def test_commit_cursor_after_a_failure_is_the_last_reflected_commit(m, tmp_path, monkeypatch):
+    """Commits are chunked whole, blank lines in the body included, so the cursor is always a real commit."""
+    repo = git_repo(tmp_path / "alpha", "alpha")
+    git = ["git", "-C", str(repo), "commit", "-q", "--allow-empty"]
+    subprocess.run([*git, "-m", "second: subject", "-m", "body paragraph one", "-m", "body paragraph two"], check=True)
+    subprocess.run([*git, "-m", "third"], check=True)
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli", transcript_chars=60))   # one commit per window
+    calls = []
+    monkeypatch.setattr(m, "llm", failing_llm(calls, 2))
+    with m.db() as c:
+        with pytest.raises(m.ReflectorFailed):
+            m.learn_repo(c, repo)
+        cur = m.cursor(c, f"repo:{repo.resolve()}:commits")
+    second = subprocess.run(["git", "-C", str(repo), "rev-parse", "--short", "HEAD~1"], capture_output=True, text=True).stdout.strip()
+    assert cur == second and "body paragraph two" in calls[1]
+
+
+def test_llm_answers_none_on_sdk_errors_cli_errors_and_timeouts(tmp_path, monkeypatch):
+    """Every way a call can fail comes back as None, which reflect() turns into ReflectorFailed; none
+    raises through a whole run. `claude -p` can report an error with exit status 0, so its JSON is read."""
+    class Messages:
+        def create(self, **kw):
+            raise RuntimeError("529 overloaded")
+
+    fake = types.ModuleType("anthropic")
+    fake.Anthropic = lambda: types.SimpleNamespace(messages=Messages())
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    m = load(tmp_path / "r", monkeypatch, MEMORY_LLM="sdk")
+    assert m.llm("x") is None
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    claude = fakebin / "claude"
+    claude.write_text("#!/bin/sh\necho '{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": true, "
+                      "\"result\": \"Claude AI usage limit reached\"}'\n")
+    claude.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fakebin}:{os.environ['PATH']}")
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="auto"))
+    assert m.llm("x") is None                                    # the SDK failed, then the CLI said is_error
+    with pytest.raises(m.ReflectorFailed):
+        m.reflect("some text", "p", set())
+    claude.write_text("#!/bin/sh\necho '{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"[]\"}'\n")
+    assert m.llm("x") == "[]"
+
+    def timeout(*a, **k):
+        raise subprocess.TimeoutExpired("claude", 180)
+
+    monkeypatch.setattr(m.subprocess, "run", timeout)
+    assert m.llm("x") is None
+
+
+def test_hook_still_journals_and_compiles_when_the_reflector_fails(m, tmp_path, monkeypatch):
+    """A failed reflection must not cost the LESSONS block; the transcript is left for the next stop."""
+    t = tmp_path / "t.jsonl"
+    transcript(t, [("user", "x"), ("assistant", "y")])
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    monkeypatch.setattr(m, "llm", lambda *a, **k: None)
+    p = hook_json(tmp_path, "LESSONS:\n[all] kept anyway\n", t)
+    m.main.__globals__["sys"].argv = ["memory", "hook", "--input", str(p)]
+    m.main()
+    assert (m.COMPILED / "PLAYBOOK.md").read_text() == "- (1) kept anyway\n"
+    with m.db() as c:
+        assert c.execute("SELECT count(*) FROM sources WHERE key LIKE 'transcript:%'").fetchone()[0] == 0
+
+
+def test_a_half_written_last_line_is_left_for_the_next_read(m, tmp_path):
+    """Claude Code may still be writing the last line; the cursor must not move past it."""
+    p = tmp_path / "t.jsonl"
+    transcript(p, [("user", "hi")])
+    whole = p.stat().st_size
+    with open(p, "a") as f:
+        f.write('{"type": "assistant", "message": {"content": "hal')
+    assert m.claude_code_turns(p) == ("USER: hi", whole)
+    with open(p, "a") as f:
+        f.write('f"}}\n')
+    assert m.claude_code_turns(p, whole) == ("ASSISTANT: half", p.stat().st_size)

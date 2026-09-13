@@ -19,6 +19,12 @@ until the system has run against a real store for at least a month.
 - `test_llm_uses_the_sdk_when_an_api_key_is_present`: the SDK Reflector path, the one both
   installs take when a key is configured, and its fall-through to `claude -p` when `anthropic`
   is not installed.
+- `tools/e2e.sh`: both installs end to end on the operator's machine, against a fake Messages
+  API (the SDK path, as if a key were provided) and a fake `claude` (the subscription path), in
+  throwaway home directories: native with a key, native through the real hooks, a usage limit
+  twice during a backfill and the resumed run, and Docker through Compose with the hooks and MCP
+  over HTTP. Local only; the Docker phase needs Docker Desktop and skips itself beside a real
+  install.
 
 ### Changed
 
@@ -29,6 +35,8 @@ until the system has run against a real store for at least a month.
   `.venv/bin/python3`, then Homebrew's Python (macOS's `/usr/bin/python3` is 3.9), and appends
   `~/.local/bin` to `PATH` so `claude` is found.
   `test_hook_runner_is_native_without_an_api_key_and_docker_with_one`.
+- The Compose image is tagged `memory-optimized-context:compose` instead of `1.0.0`, which read
+  as a release the project has not reached, and the unused `UID=502` is gone.
 
 ### Fixed
 
@@ -53,6 +61,26 @@ until the system has run against a real store for at least a month.
   `test_container_home_is_the_host_home`.
 - CI's compose check failed on every run because `.env` is never committed. It now validates
   against `.env.example`, and `tools/run_ci_locally.sh` checks a copy instead of skipping.
+- A Reflector call that failed was taken for "no lessons" and the source's cursor still moved
+  on, so on a subscription a usage limit silently skipped the rest of a backfill. `reflect()` now
+  raises `ReflectorFailed` when no answer comes, and cursors move only past what was reflected: a
+  transcript window by window, commits up to the last one reflected, a doc once its prose is
+  reflected, its tagged lines counted once. `learn` and `ingest` keep and compile what was done
+  and exit non-zero with a message; the next run resumes there. The Stop hook still journals and
+  compiles, and leaves the transcript for the next stop.
+  `test_backfill_stops_at_a_failed_window_and_the_next_run_resumes_there`,
+  `test_learn_stops_on_a_failed_reflector_keeps_its_progress_and_resumes`,
+  `test_hook_still_journals_and_compiles_when_the_reflector_fails`.
+- An SDK error (API, rate limit, network) or a `claude -p` timeout raised through the whole run
+  and rolled it back, and `claude -p` can report an error in its output rather than its exit
+  status. `llm()` now returns no answer for all of them, asks `claude -p` for
+  `--output-format json` so it can read the CLI's own `is_error`, and in `auto` mode falls back
+  from a failed SDK call to the CLI. `test_llm_answers_none_on_sdk_errors_cli_errors_and_timeouts`.
+- `learn_repo` split the log on blank lines, so a commit whose body had paragraphs became several
+  chunks, one of them named after a body word as if it were a hash. Commits are now delimited by
+  `\x1e` and chunked whole. `test_commit_cursor_after_a_failure_is_the_last_reflected_commit`.
+- The transcript reader moved its offset past a half-written last line, which was then never
+  read. `test_a_half_written_last_line_is_left_for_the_next_read`.
 
 ## [0.1.0] - 2026-09-13
 

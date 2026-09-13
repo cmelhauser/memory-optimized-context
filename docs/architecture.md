@@ -33,7 +33,9 @@ way.
 2. **Reflect.** Claude Haiku reads the transcript since the last byte offset and returns a JSON
    array of `{project, text}` lessons. The offset is stored so the next stop reflects only what
    is new. The same Reflector runs over claude.ai `conversations.json` exports, keyed by
-   conversation `updated_at`.
+   conversation `updated_at`. When no answer comes (an API or CLI error, a usage limit), no
+   cursor moves past the text that went unanswered: `learn` stops, keeps and compiles what it
+   did, and the next run resumes there.
 3. **Ingest.** Each lesson is upserted by `sha1(project | normalised text)[:10]`. An exact
    duplicate is a vote. Nothing is ever overwritten.
 4. **Reconcile.** A new lesson is compared with its six nearest neighbours in the same project.

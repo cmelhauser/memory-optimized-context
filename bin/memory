@@ -24,6 +24,7 @@ Subcommands:
 """
 import argparse, hashlib, json, math, os, re, shutil, sqlite3, subprocess, sys, tempfile, time, urllib.request
 from array import array
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -112,7 +113,8 @@ def score(r, now_ts=None):
 
 # ---------------------------------------------------------------- Claude adapter
 def llm(prompt, system="You are a precise assistant. Output only what is asked.", max_tokens=1500):
-    """Returns text. Order: SDK (ANTHROPIC_API_KEY) → `claude -p` CLI (uses your subscription) → None."""
+    """Returns text, or None when no answer came. Order: SDK (ANTHROPIC_API_KEY) → `claude -p` CLI (uses your
+    subscription). A failure is logged and returned as None, never raised; reflect() turns it into ReflectorFailed."""
     mode = CFG["llm"]
     if mode == "none": return None
     if mode in ("auto", "sdk") and os.environ.get("ANTHROPIC_API_KEY"):
@@ -123,13 +125,26 @@ def llm(prompt, system="You are a precise assistant. Output only what is asked."
             return "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
         except ImportError:
             if mode == "sdk": raise SystemExit("pip install anthropic") from None
+        except Exception as e:                      # API, rate-limit or network error; auto mode tries the CLI next
+            log("SDK call failed:", str(e)[:300])
+            if mode == "sdk": return None
     if mode in ("auto", "cli") and shutil.which("claude"):
         env = {**os.environ, "MEMORY_REFLECT": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}  # hooks check MEMORY_REFLECT and exit
-        with tempfile.TemporaryDirectory() as d:  # empty cwd → no CLAUDE.md, no project memory loaded
-            r = subprocess.run(["claude", "-p", "--model", CFG["model"], "--output-format", "text"],
-                               input=f"{system}\n\n{prompt}", capture_output=True, text=True, env=env, cwd=d, timeout=180)
-        if r.returncode == 0: return r.stdout
-        log("claude -p failed:", r.stderr[:300])
+        try:
+            with tempfile.TemporaryDirectory() as d:  # empty cwd → no CLAUDE.md, no project memory loaded
+                r = subprocess.run(["claude", "-p", "--model", CFG["model"], "--output-format", "json"],
+                                   input=f"{system}\n\n{prompt}", capture_output=True, text=True, env=env, cwd=d, timeout=180)
+        except subprocess.TimeoutExpired:
+            log("claude -p timed out"); return None
+        if r.returncode != 0:
+            log("claude -p failed:", (r.stderr or r.stdout)[:300]); return None
+        try: res = json.loads(r.stdout)
+        except json.JSONDecodeError: return r.stdout           # plain text: an older CLI, or a stand-in
+        if not isinstance(res, dict): return r.stdout
+        if res.get("is_error") or res.get("subtype", "success") != "success":   # the CLI's own verdict, not only its exit status
+            log("claude -p reported an error:", str(res.get("result") or res.get("errors"))[:300]); return None
+        return res.get("result") or ""
+    log("no Reflector: needs ANTHROPIC_API_KEY with `anthropic` installed, or `claude` on PATH")
     return None
 
 def parse_json(text):
@@ -212,11 +227,38 @@ REFLECT_SYS = ("You extract durable, reusable lessons from a conversation betwee
                "Never include secrets, credentials, health, or financial details. Output ONLY a JSON array of "
                '{"project": "<slug>", "text": "<one sentence>"}; use "all" for cross-project lessons. Empty array if nothing durable.')
 
+class ReflectorFailed(Exception):
+    """The Reflector was asked and gave no answer: an API or CLI error, a timeout, a usage limit, or no LLM at all.
+    Callers leave their cursor where it was, so the same text is offered again next run. `new` carries the upserts
+    the interrupted source had already made, so they are still reconciled and compiled."""
+    def __init__(self, why, new=()):
+        super().__init__(why); self.new = list(new)
+
+@contextmanager
+def carrying(new):
+    """Add this source's upserts so far to a ReflectorFailed passing through."""
+    try: yield
+    except ReflectorFailed as e:
+        e.new[:0] = new; raise
+
+@contextmanager
+def stopping(new):
+    """For a command: stop at the first ReflectorFailed and add the upserts it carries to `new`. Yields a list that
+    holds the failure, if there was one."""
+    failed = []
+    try: yield failed
+    except ReflectorFailed as e:
+        new += e.new; failed.append(e)
+
 def reflect(text, default_project, known_projects):
+    """Lessons in text. [] when there is nothing to read or MEMORY_LLM=none; ReflectorFailed when no answer came."""
     if not text.strip(): return []
     out = llm(f"Known project slugs: {', '.join(sorted(known_projects | {default_project, 'all'}))}\n"
               f"Default project for this conversation: {default_project}\n\n<conversation>\n{text[-CFG['transcript_chars']:]}\n</conversation>",
               REFLECT_SYS)
+    if out is None:
+        if CFG["llm"] == "none": return []
+        raise ReflectorFailed("the Reflector gave no answer; the log line above says why")
     items = parse_json(out) or []
     return [(str(i.get("project") or default_project), str(i["text"])) for i in items if isinstance(i, dict) and i.get("text")]
 
@@ -271,44 +313,60 @@ def ingest_journal(c):
         c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, "", NOW()))
     return new
 
-def claude_code_turns(path, start=0):
-    """Claude Code JSONL transcript → (text, end_offset). Incremental from byte offset."""
-    out = []
+def transcript_turns(path, start=0):
+    """Claude Code JSONL transcript → ([(turn text, byte offset just past it)], end offset). Incremental from a byte
+    offset. A last line with no newline is still being written: it is left for the next read, not skipped."""
+    out, pos = [], start
     with open(path, "rb") as f:
         f.seek(start)
         for raw in f:
+            if not raw.endswith(b"\n"): break
+            pos += len(raw)
             try: j = json.loads(raw)
             except json.JSONDecodeError: continue
-            if j.get("type") not in ("user", "assistant"): continue
+            if not isinstance(j, dict) or j.get("type") not in ("user", "assistant"): continue
             content = j.get("message", {}).get("content", "")
             if isinstance(content, list):
                 content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
-            if content.strip(): out.append(f"{j['type'].upper()}: {content.strip()}")
-        end = f.tell()
-    return "\n\n".join(out), end
+            if content.strip(): out.append((f"{j['type'].upper()}: {content.strip()}", pos))
+    return out, pos
 
-def windows(text, size):
-    """Split text into pieces of at most `size` chars, at paragraph breaks where possible. Nothing is dropped."""
-    out, buf = [], ""
-    for para in text.split("\n\n"):
-        while len(para) > size:                    # one paragraph longer than a window: cut it
-            if buf: out.append(buf); buf = ""
-            out.append(para[:size]); para = para[size:]
-        if buf and len(buf) + 2 + len(para) > size:
-            out.append(buf); buf = para
+def claude_code_turns(path, start=0):
+    """Claude Code JSONL transcript → (text, end_offset). Incremental from byte offset."""
+    turns, end = transcript_turns(path, start)
+    return "\n\n".join(t for t, _ in turns), end
+
+def turn_windows(turns, start, size):
+    """Group (turn text, offset past it) into [(window text, offset to resume from once it is reflected)], each window
+    at most `size` chars. A turn longer than a window is cut, and only its last piece moves the offset past it."""
+    out, buf, done = [], "", start
+    for text, end in turns:
+        if buf and len(buf) + 2 + len(text) > size:
+            out.append((buf, done)); buf = ""
+        if len(text) > size:
+            pieces = [text[i:i + size] for i in range(0, len(text), size)]
+            out += [(p, done) for p in pieces[:-1]] + [(pieces[-1], end)]
         else:
-            buf = f"{buf}\n\n{para}" if buf else para
-    return out + ([buf] if buf.strip() else [])
+            buf = f"{buf}\n\n{text}" if buf else text
+        done = end
+    return out + ([(buf, done)] if buf else [])
 
 def ingest_transcript(c, path, project, backfill=False):
-    """Reflect a transcript from its cursor. A Stop hook sends the tail (a stop follows every turn);
-    a backfill sends every window, so a long history is read whole rather than its last 30k chars."""
+    """Reflect a transcript from its cursor. A Stop hook sends the tail (a stop follows every turn). A backfill sends
+    every window, so a long history is read whole, and moves the cursor window by window, so a ReflectorFailed
+    part-way costs none of the windows already reflected."""
     key = f"transcript:{path}"
-    row = c.execute("SELECT cursor FROM sources WHERE key=?", (key,)).fetchone()
-    text, end = claude_code_turns(path, int(row["cursor"]) if row and row["cursor"] else 0)
-    parts = windows(text, CFG["transcript_chars"]) if backfill else [text]
-    new = [upsert(c, p, t) for part in parts for p, t in reflect(part, project, known_projects(c))]
-    c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, str(end), NOW()))
+    start = int(cursor(c, key) or 0)
+    turns, end = transcript_turns(path, start)
+    if not backfill:
+        new = [upsert(c, p, t) for p, t in reflect("\n\n".join(t for t, _ in turns), project, known_projects(c))]
+    else:
+        new = []
+        with carrying(new):
+            for text, done in turn_windows(turns, start, CFG["transcript_chars"]):
+                new += [upsert(c, p, t) for p, t in reflect(text, project, known_projects(c))]
+                set_cursor(c, key, str(done))
+    set_cursor(c, key, str(end))
     return new
 
 def export_msg_text(m):
@@ -320,14 +378,15 @@ def ingest_export(c, path):
     """claude.ai data export (conversations.json). Covers web, Desktop, mobile, Cowork chats."""
     convs = json.loads(Path(path).read_text())
     new = []
-    for cv in convs:
-        key = f"export:{cv.get('uuid')}"; upd = cv.get("updated_at", "")
-        row = c.execute("SELECT cursor FROM sources WHERE key=?", (key,)).fetchone()
-        if row and row["cursor"] == upd: continue
-        text = "\n\n".join(f"{m.get('sender','').upper()}: {t}" for m in cv.get("chat_messages", []) if (t := export_msg_text(m)))
-        slug = re.sub(r"[^a-z0-9]+", "-", (cv.get("name") or "all").lower()).strip("-")[:40] or "all"
-        new += [upsert(c, p, t) for p, t in reflect(text, slug, known_projects(c))]
-        c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, upd, NOW()))
+    with carrying(new):
+        for cv in convs:
+            key = f"export:{cv.get('uuid')}"; upd = cv.get("updated_at", "")
+            row = c.execute("SELECT cursor FROM sources WHERE key=?", (key,)).fetchone()
+            if row and row["cursor"] == upd: continue
+            text = "\n\n".join(f"{m.get('sender','').upper()}: {t}" for m in cv.get("chat_messages", []) if (t := export_msg_text(m)))
+            slug = re.sub(r"[^a-z0-9]+", "-", (cv.get("name") or "all").lower()).strip("-")[:40] or "all"
+            new += [upsert(c, p, t) for p, t in reflect(text, slug, known_projects(c))]
+            c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, upd, NOW()))
     return new
 
 
@@ -353,8 +412,9 @@ def cursor(c, key):
 def set_cursor(c, key, value):
     c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, value, NOW()))
 
-def reflect_batches(c, chunks, project, label):
-    """Reflect a list of (name, text) in ~30k-char windows. Returns upsert results.
+def reflect_batches(c, chunks, project, label, done=lambda name: None):
+    """Reflect a list of (name, text) in ~30k-char windows. Returns upsert results. `done(name)` is called for each
+    chunk once its window is reflected, so a caller moves that chunk's cursor and no further.
     The budget counts each `### name` header and the label, not just the text, so reflect()'s
     30k tail cut never removes the head of a window."""
     new, buf, size = [], [], 0
@@ -364,12 +424,14 @@ def reflect_batches(c, chunks, project, label):
         if buf:
             text = "\n\n".join(f"### {n}\n{t}" for n, t in buf)
             new.extend(upsert(c, p, t) for p, t in reflect(f"[{label}]\n{text}", project, known_projects(c)))
+            for n, _ in buf: done(n)
             buf, size = [], 0
-    for name, text in chunks:
-        text = text[:DOC_MAX_CHARS]; piece = len(f"### {name}\n{text}") + 2   # + the "\n\n" that joins it
-        if size + piece > budget: flush()
-        buf.append((name, text)); size += piece
-    flush()
+    with carrying(new):
+        for name, text in chunks:
+            text = text[:DOC_MAX_CHARS]; piece = len(f"### {name}\n{text}") + 2   # + the "\n\n" that joins it
+            if size + piece > budget: flush()
+            buf.append((name, text)); size += piece
+        flush()
     return new
 
 def git(repo, *args):
@@ -384,46 +446,52 @@ def repo_slug(path):
     top = git(path, "rev-parse", "--show-toplevel").strip() or str(path)
     return Path(top).name.lower()
 
+def take_docs(c, files, key_of, name_of):
+    """Upsert each changed file's `[proj] fact` lines now; return its prose for the Reflector and a callback that marks
+    a file read once its prose is reflected. Until then its cursor is "tagged:<hash>": the tagged lines are in and only
+    the prose is owed, so a retry after a ReflectorFailed neither loses the prose nor counts a tagged line twice."""
+    new, prose, pending = [], [], {}
+    for f in files:
+        text = f.read_text(errors="ignore"); key = key_of(f); h = sha(text); cur = cursor(c, key)
+        if cur == h: continue
+        tagged, rest = split_tagged(text)
+        if cur != f"tagged:{h}": new += [upsert(c, pr, t) for pr, t in tagged]
+        set_cursor(c, key, f"tagged:{h}" if rest else h)
+        if rest: prose.append((name_of(f), rest)); pending[name_of(f)] = (key, h)
+    return new, prose, lambda name: set_cursor(c, *pending[name])
+
 def learn_repo(c, path, since=None):
-    """Commit messages since the last seen hash, plus docs whose content hash changed. One Reflector batch per window."""
+    """Commit messages since the last seen hash, plus docs whose content hash changed. One Reflector batch per window;
+    the commit cursor follows the windows, so a ReflectorFailed part-way resumes at the first commit not yet read."""
     path = Path(path).expanduser().resolve(); project = repo_slug(path); new = []
-    head = git(path, "rev-parse", "HEAD").strip()
-    if head:
-        key = f"repo:{path}:commits"; last = cursor(c, key)
-        rng = f"{last}..HEAD" if last and git_ok(path, "cat-file", "-e", last) else "HEAD"   # a rewritten history falls back to full
-        args = ["log", rng, "--no-merges", "--format=%h %ad %s%n%b", "--date=short", "--reverse"]
-        if since and not last: args.append(f"--since={since}")
-        logtxt = git(path, *args).strip()
-        if logtxt and head != last:   # one chunk per commit, so a long history is windowed, not truncated
-            new += reflect_batches(c, [(f"commit {e.split()[0]}", e) for e in logtxt.split("\n\n") if e.strip()], project, f"git history of {project}")
-        set_cursor(c, key, head)
-    docs = []
-    for g in DOC_GLOBS:
-        for f in sorted(path.glob(g)):
-            if not f.is_file() or ".git" in f.parts or f.stat().st_size > 2_000_000: continue
-            rel = str(f.relative_to(path)); text = f.read_text(errors="ignore")
-            key = f"repo:{path}:doc:{rel}"; h = sha(text)
-            if cursor(c, key) == h: continue
-            tagged, rest = split_tagged(text)
-            new += [upsert(c, pr, t) for pr, t in tagged]
-            if rest: docs.append((rel, rest))
-            set_cursor(c, key, h)
-    if docs:
-        new += reflect_batches(c, docs, project, f"documentation of {project}")
+    with carrying(new):
+        head = git(path, "rev-parse", "HEAD").strip()
+        if head:
+            key = f"repo:{path}:commits"; last = cursor(c, key)
+            rng = f"{last}..HEAD" if last and git_ok(path, "cat-file", "-e", last) else "HEAD"   # a rewritten history falls back to full
+            args = ["log", rng, "--no-merges", "--format=%x1e%h %ad %s%n%b", "--date=short", "--reverse"]  # \x1e opens each commit
+            if since and not last: args.append(f"--since={since}")
+            commits = [e.strip() for e in git(path, *args).split("\x1e") if e.strip()]   # a body's blank lines stay in its commit
+            if commits and head != last:   # one chunk per commit, so a long history is windowed, not truncated
+                new += reflect_batches(c, [(f"commit {e.split()[0]}", e) for e in commits], project, f"git history of {project}",
+                                       done=lambda name: set_cursor(c, key, name.split()[1]))
+            set_cursor(c, key, head)
+        files = []
+        for g in DOC_GLOBS:   # README.md matches two globs; each file is read once
+            files += [f for f in sorted(path.glob(g)) if f not in files and f.is_file() and ".git" not in f.parts and f.stat().st_size <= 2_000_000]
+        got, docs, done = take_docs(c, files, lambda f: f"repo:{path}:doc:{f.relative_to(path)}", lambda f: str(f.relative_to(path)))
+        new += got
+        if docs: new += reflect_batches(c, docs, project, f"documentation of {project}", done)
     return new
 
 def learn_notes(c, folder, project=None):
     """Every .md/.txt under folder. `[proj] fact` lines are ingested directly; everything else goes to the Reflector."""
-    folder = Path(folder).expanduser().resolve(); project = (project or folder.name).lower(); new, prose = [], []
-    for f in sorted(list(folder.rglob("*.md")) + list(folder.rglob("*.txt"))):
-        if not f.is_file(): continue
-        text = f.read_text(errors="ignore"); key = f"notes:{f}"; h = sha(text)
-        if cursor(c, key) == h: continue
-        tagged, rest = split_tagged(text)
-        new += [upsert(c, pr, t) for pr, t in tagged]
-        if rest: prose.append((str(f.relative_to(folder)), rest))
-        set_cursor(c, key, h)
-    if prose: new += reflect_batches(c, prose, project, f"notes in {folder.name}")
+    folder = Path(folder).expanduser().resolve(); project = (project or folder.name).lower(); new = []
+    with carrying(new):
+        files = [f for f in sorted(list(folder.rglob("*.md")) + list(folder.rglob("*.txt"))) if f.is_file()]
+        got, prose, done = take_docs(c, files, lambda f: f"notes:{f}", lambda f: str(f.relative_to(folder)))
+        new += got
+        if prose: new += reflect_batches(c, prose, project, f"notes in {folder.name}", done)
     return new
 
 def project_of(cwd):
@@ -454,17 +522,20 @@ def claude_code_project_dirs(root=None):
 
 def learn_transcripts(c, root=None):
     new = []
-    for slug, files in claude_code_project_dirs(root):
-        for f in files: new += ingest_transcript(c, f, slug, backfill=True)
+    with carrying(new):
+        for slug, files in claude_code_project_dirs(root):
+            for f in files: new += ingest_transcript(c, f, slug, backfill=True)
     return new
 
 def learn_all(c, repos_root=None, notes=None, exports=None):
-    new = learn_transcripts(c)
-    for r in sorted(Path(repos_root).expanduser().glob("*/")) if repos_root else []:
-        if (r / ".git").exists(): new += learn_repo(c, r)
-    if notes and Path(notes).expanduser().exists(): new += learn_notes(c, notes)
-    for e in sorted(Path(exports).expanduser().glob("*.json")) if exports else []:
-        new += ingest_export(c, e)
+    new = []
+    with carrying(new):
+        new += learn_transcripts(c)
+        for r in sorted(Path(repos_root).expanduser().glob("*/")) if repos_root else []:
+            if (r / ".git").exists(): new += learn_repo(c, r)
+        if notes and Path(notes).expanduser().exists(): new += learn_notes(c, notes)
+        for e in sorted(Path(exports).expanduser().glob("*.json")) if exports else []:
+            new += ingest_export(c, e)
     return new
 
 
@@ -519,32 +590,40 @@ def cmd_hook(a):
         new = ingest_journal(c)
         tp = j.get("transcript_path")
         if tp and Path(tp).exists() and CFG["llm"] != "none":
-            new += ingest_transcript(c, tp, project)
+            try: new += ingest_transcript(c, tp, project)
+            except ReflectorFailed as e: log(f"hook {a.role}: {e}; the transcript is left for the next stop")
         post_ingest(c, new); c.commit()
         n, p = compile_(c); c.commit()
     log(f"hook {a.role}: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned")
 
+STOPPED = "memory: {} stopped early: {}. What was read is kept and compiled; run it again to resume."
+
 def cmd_ingest(a):
     with Lock(), db() as c:
         new = ingest_journal(c)
-        if a.transcript: new += ingest_transcript(c, a.transcript, a.project or "all")
-        if a.export: new += ingest_export(c, a.export)
+        with stopping(new) as failed:
+            if a.transcript: new += ingest_transcript(c, a.transcript, a.project or "all")
+            if a.export: new += ingest_export(c, a.export)
         post_ingest(c, new); c.commit()
         n, p = compile_(c); c.commit()
     log(f"ingest: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned")
+    if failed: sys.exit(STOPPED.format("ingest", failed[0]))
 
 def cmd_learn(a):
-    """Read everything once, then only what changed. Idempotent; cursors live in `sources`."""
+    """Read everything once, then only what changed. Idempotent; cursors live in `sources`. At the first
+    ReflectorFailed it stops, keeps and compiles what was read, and exits non-zero; the next run resumes there."""
     with Lock(), db() as c:
         new = ingest_journal(c)
-        if a.all: new += learn_all(c, a.repos or (Path.home() / "GitHub"), a.notes, a.exports or (ROOT / "exports"))
-        for r in a.repo or []: new += learn_repo(c, r, a.since)
-        if a.notes and not a.all: new += learn_notes(c, a.notes, a.project)
-        if a.transcripts and not a.all: new += learn_transcripts(c)
-        for e in a.export or []: new += ingest_export(c, e)
+        with stopping(new) as failed:
+            if a.all: new += learn_all(c, a.repos or (Path.home() / "GitHub"), a.notes, a.exports or (ROOT / "exports"))
+            for r in a.repo or []: new += learn_repo(c, r, a.since)
+            if a.notes and not a.all: new += learn_notes(c, a.notes, a.project)
+            if a.transcripts and not a.all: new += learn_transcripts(c)
+            for e in a.export or []: new += ingest_export(c, e)
         post_ingest(c, new); c.commit()
         n, p = compile_(c); c.commit()
     log(f"learn: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned")
+    if failed: sys.exit(STOPPED.format("learn", failed[0]))
 
 def cmd_compile(a):
     with Lock(), db() as c:

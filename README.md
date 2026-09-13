@@ -15,9 +15,10 @@ start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.1.0`. 52 tests, coverage 93 per cent on `bin/memory`, six-process concurrency test green.
-The image is built and smoke-tested on the Mac mini (arm64), and both installs have run end to
-end against a fake Reflector. Not yet run against a real store; see `HANDOFF.md`.
+`v0.1.0`. 58 tests, coverage 93 per cent on `bin/memory`, six-process concurrency test green.
+The image is built and smoke-tested on the Mac mini (arm64), and `tools/e2e.sh` runs both
+installs end to end against a fake Reflector. Not yet run against a real store; see
+`HANDOFF.md`.
 
 ## What it does
 
@@ -168,8 +169,8 @@ database, so it is safe to run daily; a second run over an unchanged source make
 
 | Source | Flag | What is read | Cursor |
 |---|---|---|---|
-| Claude Code transcripts, all projects | `--transcripts` | every `~/.claude/projects/*/*.jsonl`, whole, in ~30k windows; project from the `cwd` recorded in the transcript, a worktree counting as its repository | byte offset per file |
-| A git repository | `--repo PATH` | commit messages (`--no-merges`, oldest first), `README*`, `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `HANDOFF.md`, `docs/**/*.md`, `*.md` | last commit hash; content hash per doc |
+| Claude Code transcripts, all projects | `--transcripts` | every `~/.claude/projects/*/*.jsonl`, whole, in ~30k windows; project from the `cwd` recorded in the transcript, a worktree counting as its repository | byte offset per file, moved window by window |
+| A git repository | `--repo PATH` | commit messages (`--no-merges`, oldest first), `README*`, `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `HANDOFF.md`, `docs/**/*.md`, `*.md` | last commit reflected; content hash per doc |
 | A folder of notes | `--notes DIR [--project slug]` | every `.md` and `.txt`, recursively | content hash per file |
 | claude.ai export (web, Desktop, mobile, Cowork) | `--export FILE` | `conversations.json`, both message shapes | `updated_at` per conversation |
 | All of the above | `--all [--repos ~/GitHub] [--notes DIR] [--exports ~/memory/exports]` | transcripts, every git repo under `--repos`, notes, every `*.json` under `--exports` | as above |
@@ -179,6 +180,11 @@ directly with no LLM call. Everything else goes through the Reflector in windows
 characters, one Haiku call per window. A repository with a thousand commits costs roughly ten
 calls the first time and none afterwards. `--since 2025-01-01` bounds the first pass. No notes
 folder is read unless you name one with `--notes`.
+
+If the Reflector gives no answer part-way (a usage limit, an API or network error), `learn`
+stops, keeps and compiles what it has, and exits non-zero with a message. No cursor moves past
+text that went unanswered, so running it again later resumes where it stopped and sends nothing
+twice.
 
 ```bash
 python3 bin/memory learn --all                           # native
@@ -230,8 +236,8 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       52 tests, six-process concurrency test included
-tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, check_docs.py, eval_recall.py
+tests/test_memory.py       58 tests, six-process concurrency test included
+tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
 docs/research.md           what was checked before deciding, and what each finding changed
@@ -246,7 +252,12 @@ Dockerfile, docker-compose.yml, .env.example
 python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements-dev.txt
 tools/run_ci_locally.sh            # lint, shellcheck, tests with the coverage gate
 tools/run_ci_locally.sh --image    # plus the container build
+tools/e2e.sh                       # both installs end to end against fakes; --no-docker for native only
 ```
+
+`tools/e2e.sh` needs no API key and makes no real `claude -p` call: a fake Messages API and a
+fake `claude` stand in, and everything runs in throwaway home directories. Its Docker phase
+needs Docker Desktop and skips itself on a machine where the real `memory` container is running.
 
 `AGENTS.md` has the ground rules, `RELEASING.md` the branch and tag scheme, `CONTRIBUTING.md`
 what will and will not be merged. `tools/check_docs.py` fails CI if a count in this file stops
@@ -258,4 +269,5 @@ One Haiku call per session stop (transcript tail ≤ 30k chars) plus one per new
 
 The first `learn --all` is the expensive run: one call per ~30k window of every transcript, commit
 log and doc set, which for months of history is hundreds of calls. On a subscription that can
-reach usage limits, so it can be taken a source at a time (`--repo`, `--transcripts`).
+reach a usage limit; a run that meets one stops and resumes on the next, so it can simply be run
+again later, or taken a source at a time (`--repo`, `--transcripts`).

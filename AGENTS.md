@@ -6,13 +6,14 @@ two overlap.
 
 ## What this project is
 
-A single-file personal memory system for Claude. `bin/memory` (about 450 lines, standard
+A single-file personal memory system for Claude. `bin/memory` (about 490 lines, standard
 library only) owns a SQLite store, an append-only journal, a locked compiler, a Reflector that
 calls Claude to extract lessons from transcripts, a contradiction check, a pruner, hybrid
 search, and an MCP server. Two shell hooks, sharing `hooks/runner.sh`, connect it to Claude
 Code. It runs natively by default, reflecting through `claude -p`; a Dockerfile and Compose file
-run it in a container on the Mac mini when an API key is configured. Fifty-two tests cover it at
-93 per cent, including a six-process concurrency test.
+run it in a container on the Mac mini when an API key is configured. Fifty-eight tests cover it
+at 93 per cent, including a six-process concurrency test, and `tools/e2e.sh` runs both installs
+end to end against a fake Reflector.
 
 The Human Author is Christopher Melhauser (`christopher.melhauser@gmail.com`); the AI
 Collaborator is theonlymuffinbot (`theonlymuffinbot@outlook.com`), using Anthropic Claude. See
@@ -46,6 +47,7 @@ Collaborator is theonlymuffinbot (`theonlymuffinbot@outlook.com`), using Anthrop
 | `hooks/` | Claude Code hook scripts, the runner they share, and the `settings.json` snippet |
 | `tests/test_memory.py` | the suite |
 | `tools/run_ci_locally.sh` | what CI runs, runnable locally |
+| `tools/e2e.sh`, `tools/e2e/` | both installs end to end against a fake API and a fake `claude`; local only |
 | `tools/check_docs.py` | prose counts, version, links and paths re-derived from the tree |
 | `tools/eval_recall.py`, `eval/` | recall@k against a frozen question set |
 | `tools/init_store.sh`, `tools/bootstrap.sh` | create the store; publish the repository |
@@ -60,4 +62,5 @@ Collaborator is theonlymuffinbot (`theonlymuffinbot@outlook.com`), using Anthrop
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
 tools/run_ci_locally.sh
+tools/e2e.sh            # after a change to the hooks, the Dockerfile, the Compose file or the Reflector
 ```
