@@ -1,0 +1,23 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+
+# Runtime state. This repository is the code; the memory store itself lives in ~/memory and
+# is never committed here.
+.lock/
+memory.db*
+hook.log
+*.tmp
+.env
+
+# Test and coverage artifacts. The suite and its configuration are tracked; what the runs
+# leave behind is not.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Your own eval set is about your store, not the code.
+eval/questions.jsonl

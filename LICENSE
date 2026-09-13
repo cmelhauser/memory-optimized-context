@@ -1,0 +1,35 @@
+# The Unlicense
+
+This is free and unencumbered project material released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or distribute this project material,
+either in source code form or as a compiled binary, for any purpose, commercial or non-commercial,
+and by any means.
+
+In jurisdictions that recognize copyright laws, the author or authors of this project material
+dedicate any and all copyright interest in the project material to the public domain. This
+dedication is for the benefit of the public at large and to the detriment of the authors' heirs
+and successors. The authors intend this dedication to be an overt act of relinquishment in
+perpetuity of all present and future rights to this project material under copyright law.
+
+THE PROJECT MATERIAL IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE
+AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE PROJECT MATERIAL OR THE USE OR OTHER DEALINGS IN THE PROJECT MATERIAL.
+
+For more information, please refer to <https://unlicense.org/>.
+
+## Courtesy credit
+
+No attribution is legally required. If reasonable, please retain this non-binding courtesy credit:
+
+> *memory-optimized-context* (2026). AI collaboration: theonlymuffinbot, using Anthropic
+> Claude.
+
+## Scope
+
+This public-domain dedication covers only original project material. It does not apply to
+third-party software this project depends on (Python, SQLite, the `anthropic` and `mcp`
+packages, Docker images), which remain under their own licenses. It does not apply to the
+contents of any memory store the tool produces; those belong to whoever ran it.

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "memory": {
+      "command": "/usr/local/bin/docker",
+      "args": ["exec", "-i", "memory", "python3", "/app/memory", "mcp"]
+    }
+  }
+}

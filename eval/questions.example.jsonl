@@ -1,0 +1,3 @@
+{"query": "GID container docker", "project": "all", "expect": ["GID=20"]}
+{"query": "image tags pinned", "project": "db-server", "expect": ["pin"]}
+{"query": "maxconn after the migration", "project": "db-server", "expect": ["1024"]}
