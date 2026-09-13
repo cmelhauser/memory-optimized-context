@@ -9,7 +9,14 @@ cd "$(dirname "$0")/.."
 echo "== lint"
 ruff check .
 shellcheck hooks/*.sh tools/*.sh
-HOME=/tmp docker compose config -q 2>/dev/null || echo "   (docker compose not available; skipped compose validation)"
+# Compose refuses to start without .env, on purpose (see hooks/runner.sh). Validate a copy against
+# .env.example rather than touch the operator's own .env.
+if docker compose version >/dev/null 2>&1; then
+  tmp=$(mktemp -d); cp docker-compose.yml "$tmp/"; cp .env.example "$tmp/.env"
+  docker compose -f "$tmp/docker-compose.yml" config -q; rm -rf "$tmp"
+else
+  echo "   (docker compose not available; skipped compose validation)"
+fi
 
 echo "== docs match the tree"
 python3 tools/check_docs.py

@@ -60,7 +60,7 @@ Then tag. **Annotated, never lightweight**, because the message is where the sta
 and the release workflow rejects lightweight tags:
 
 ```bash
-git tag -a v0.1.0 -m "v0.1.0: first cut. 46 tests, coverage 89%, image python:3.12.6-slim-bookworm."
+git tag -a v0.1.0 -m "v0.1.0: first cut. forty-six tests, coverage 89%, image python:3.12.6-slim-bookworm."
 git push origin v0.1.0
 ```
 

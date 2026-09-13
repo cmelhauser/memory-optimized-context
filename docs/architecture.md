@@ -23,8 +23,10 @@ way.
 0. **Learn.** `memory learn --all` walks Claude Code transcripts, git repositories (commit
    messages and docs), note folders and claude.ai exports. Each source has a cursor in the
    `sources` table, so the walk is incremental: a commit hash, a content hash, a byte offset,
-   an `updated_at`. `[project] fact` lines anywhere are ingested without an LLM call; prose is
-   windowed into ~30k-character batches for the Reflector.
+   an `updated_at`. `[project] fact` lines anywhere are ingested without an LLM call; prose and
+   whole transcripts are windowed into ~30k-character batches for the Reflector, headers
+   counted, so nothing is cut. A transcript's project is the `cwd` recorded in it, the same slug
+   the Stop hook derives; a Claude Code worktree counts as its repository.
 1. **Capture.** A Claude Code `Stop` or `SubagentStop` hook writes the hook JSON to a temp file,
    forks `memory hook`, and returns. `memory hook` journals any `LESSONS:` block from the last
    assistant message, then hands the transcript tail to the Reflector.
@@ -85,12 +87,20 @@ Embeddings are off by default. The corpus is dense with exact tokens (`dbcache`,
 
 ## Runtime placement
 
+`hooks/runner.sh` decides on every run. When this checkout's `.env` holds an `ANTHROPIC_API_KEY`
+the hooks `docker exec` into the container; otherwise they run `bin/memory` on the host, which
+reflects through `claude -p` on the subscription. `MEMORY_RUNNER` overrides both. Natively,
+everything is on the host and `memory.db` sits in `~/memory`. In the container:
+
 | Piece | Where | Why |
 |---|---|---|
 | `bin/memory`, Reflector, MCP server | container | pinned image, restart policy, 256 MB cap |
 | `memory.db` | named volume | SQLite locking on macOS bind mounts is unreliable |
 | journals, compiled, archive, `.git` | bind mount `~/memory` | Drive sync and `@` imports need host files |
 | `~/.claude/projects` | bind mount, read-only | transcripts |
+| `~/GitHub` | bind mount, read-only | `learn --all`: commit messages and docs |
 | hooks | host | Claude Code runs there |
 
-Identical paths inside and outside the container, so hook JSON needs no translation.
+Identical paths inside and outside the container, so hook JSON needs no translation, and `HOME`
+is the host's, so `Path.home()` finds the mounts. The two installs keep separate databases:
+choose one and keep it, or carry `memory.db` across when switching.

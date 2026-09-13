@@ -58,8 +58,10 @@ jobs:
       - name: Lint the shell scripts
         run: shellcheck hooks/*.sh tools/*.sh
 
+      # Compose refuses to start without .env, on purpose (no key means a native install; see
+      # hooks/runner.sh), so the file is validated against the example.
       - name: Compose file is valid
-        run: HOME=/tmp docker compose config -q
+        run: cp .env.example .env && HOME=/tmp docker compose config -q
 
       # Counts stated in prose, the version, every relative link, and the absence of any
       # host-specific path, all re-derived from the tree.
