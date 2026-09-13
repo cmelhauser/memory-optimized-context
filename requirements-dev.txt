@@ -1,0 +1,15 @@
+# Development and CI dependencies.
+#
+# The tool itself needs only the Python standard library. Everything here exists to test and
+# check the repository. Versions are floors rather than pins: the runtime pins live in the
+# Dockerfile, where reproducibility matters.
+pytest>=8.0
+pytest-cov>=5.0
+coverage>=7.4
+# Lint. The ruleset is narrow (syntax errors, pyflakes, bugbear), so a newer ruff will not
+# start failing the build on style.
+ruff>=0.6
+# Shell lint for hooks/*.sh and tools/*.sh. The wheel bundles the shellcheck binary.
+shellcheck-py>=0.10
+# Optional at runtime, required by the MCP server test.
+mcp>=1.13

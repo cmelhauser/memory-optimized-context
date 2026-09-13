@@ -1,0 +1,22 @@
+# Coverage configuration.
+#
+# SCOPE. The gate covers `bin/memory`, the whole tool. Three regions are excluded by pattern
+# because they are network clients that a unit test cannot exercise without a key: the
+# Anthropic SDK and `claude -p` branches of `llm()`, the embedding HTTP calls, and the MCP
+# server's transport startup. Everything that touches the store, the lock, the journal, the
+# compiler, the adapters and the reconciliation logic is inside the gate.
+[run]
+branch = False
+include =
+    bin/memory
+
+[report]
+show_missing = True
+skip_covered = False
+fail_under = 80
+exclude_also =
+    if __name__ == .__main__.:
+    # Network clients; see SCOPE above.
+    import anthropic
+    urllib.request.urlopen
+    srv.run\(

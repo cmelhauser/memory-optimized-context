@@ -1,0 +1,3 @@
+{"query": "GID container docker", "project": "all", "expect": ["GID=20"]}
+{"query": "image tags pinned", "project": "bitcoin-node", "expect": ["pin"]}
+{"query": "dbcache after IBD", "project": "bitcoin-node", "expect": ["1024"]}

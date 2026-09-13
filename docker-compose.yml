@@ -1,0 +1,32 @@
+# Runs the memory CLI, the Reflector and the MCP server in one container. The hooks stay on the
+# host because Claude Code runs there; they `docker exec` into this container and return.
+#
+# ${HOME} is interpolated by Compose from the shell that runs `docker compose up`. Both bind
+# mounts use identical paths inside and outside the container, so a transcript_path taken from
+# Claude Code's hook JSON resolves without translation.
+services:
+  memory:
+    build: .
+    image: memory-optimized-context:1.0.0
+    container_name: memory
+    platform: linux/arm64
+    restart: unless-stopped
+    env_file: .env                         # ANTHROPIC_API_KEY, optional VOYAGE_API_KEY / MEMORY_EMBED
+    environment:
+      - UID=502
+      - MEMORY_ROOT=${HOME}/memory
+    volumes:
+      - ${HOME}/memory:${HOME}/memory
+      - ${HOME}/.claude/projects:${HOME}/.claude/projects:ro
+      - ${HOME}/GitHub:${HOME}/GitHub:ro             # `memory learn --all`: commit messages and docs
+      - memory-db:/data                    # SQLite on a named volume, never on a macOS bind mount
+    ports:
+      - "127.0.0.1:8765:8765"              # MCP over HTTP, host loopback only
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket;socket.create_connection(('127.0.0.1',8765),3)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+volumes:
+  memory-db:

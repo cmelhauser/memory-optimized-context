@@ -1,0 +1,120 @@
+name: CI
+
+# Three jobs, split by what they verify.
+#
+# `lint` also runs tools/check_docs.py, so a stale count in the README fails the build.
+#
+# `lint` is its own job so a style failure reads as a style failure and reports in seconds.
+# The ruleset is narrow by design: syntax errors, pyflakes and bugbear. See ruff.toml.
+#
+# `unit-tests` runs pytest with the coverage gate on `bin/memory`. Pull requests use Python 3.12
+# only; `main` and manual runs cover 3.10 through 3.13, because 3.10 is the floor the tool
+# declares and the Docker image runs 3.12.
+#
+# `container` builds the image on `main` and on demand, not on pull requests. It is the one job
+# with network fetches beyond pip (the base image, apt, and two wheels), so it is kept off the
+# pull-request path the same way the sibling repository keeps its PDF toolchain off it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install ruff and shellcheck
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Python lint
+        run: ruff check --output-format=github .
+
+      # The workflow is code too. actionlint also runs shellcheck over every `run:` block.
+      - name: Lint this workflow
+        uses: raven-actions/actionlint@v2
+
+      - name: Lint the shell scripts
+        run: shellcheck hooks/*.sh tools/*.sh
+
+      - name: Compose file is valid
+        run: HOME=/tmp docker compose config -q
+
+      # Counts stated in prose, the version, every relative link, and the absence of any
+      # host-specific path, all re-derived from the tree.
+      - name: Documentation matches the tree
+        run: python tools/check_docs.py
+
+  unit-tests:
+    name: Unit tests (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.12"]') || fromJSON('["3.10", "3.11", "3.12", "3.13"]') }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Unit tests, with the coverage gate on bin/memory
+        run: python -m pytest --cov --cov-report=term-missing
+
+  container:
+    name: Container image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Built for amd64 here because that is what the runner is; the compose file pins arm64
+      # for the Mac mini. The Dockerfile has no architecture-specific steps, so a green amd64
+      # build is evidence the arm64 build will succeed; the release workflow builds both.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: memory-optimized-context:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: The image runs the CLI
+        run: |
+          docker run --rm -e MEMORY_ROOT=/tmp/m -e MEMORY_DB=/tmp/m/memory.db -e MEMORY_LLM=none \
+            --entrypoint python3 memory-optimized-context:ci /app/memory compile

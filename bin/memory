@@ -1,0 +1,594 @@
+#!/usr/bin/env python3
+"""
+memory — personal memory system for Claude. One file, stdlib only, Python 3.10+.
+Optional extras: `anthropic` (SDK) or `claude` CLI for reflection; `mcp` for the MCP server.
+
+Layout ($MEMORY_ROOT, default ~/memory):
+  memory.db            SQLite: lessons + FTS5 (+ optional embeddings)   ← only `memory` writes this
+  journal/DATE/*.md    raw LESSONS files, one per hook event / claude.ai note (never edited)
+  compiled/            PLAYBOOK.md + projects/*.md, atomic rename       ← only `memory` writes this
+  archive/             pruned + superseded lessons, dated markdown
+  .lock/               mkdir lock; every write path takes it
+
+Subcommands:
+  hook      called by Claude Code hooks (stdin/--input JSON): journal LESSONS, reflect transcript tail, ingest, compile
+  ingest    journal files, --transcript PATH, --export conversations.json
+  learn     everything else, incrementally: --repo (commit messages + docs), --notes, --transcripts
+            (backfill ~/.claude/projects), --export; --all does all of them
+  compile   write compiled/*.md from active lessons (also prunes)
+  search    hybrid FTS5 + vector, RRF
+  remember  add one lesson by hand
+  vote      --helpful/--harmful ID
+  mcp       MCP server exposing recall / remember / feedback. --transport stdio (Claude Desktop, docker exec -i)
+            or --transport http (Claude Code: claude mcp add --transport http memory http://127.0.0.1:8765/mcp)
+"""
+import argparse, hashlib, json, math, os, re, shutil, sqlite3, subprocess, sys, tempfile, time, urllib.request
+from array import array
+from datetime import datetime, timezone
+from pathlib import Path
+
+# ---------------------------------------------------------------- config
+ROOT = Path(os.environ.get("MEMORY_ROOT", Path.home() / "memory"))
+JOURNAL, COMPILED, ARCHIVE, LOCK = (ROOT / p for p in ("journal", "compiled", "archive", ".lock"))
+DB = Path(os.environ.get("MEMORY_DB", ROOT / "memory.db"))   # in Docker: a named volume, not a macOS bind mount
+CFG = {
+    "llm": os.environ.get("MEMORY_LLM", "auto"),          # auto | sdk | cli | none
+    "model": os.environ.get("MEMORY_MODEL", "claude-haiku-4-5-20251001"),
+    "embed": os.environ.get("MEMORY_EMBED", "none"),      # none | voyage | openai
+    "embed_model": os.environ.get("MEMORY_EMBED_MODEL", ""),
+    "half_life_days": float(os.environ.get("MEMORY_HALF_LIFE", 90)),
+    "max_lines": int(os.environ.get("MEMORY_MAX_LINES", 150)),
+    "min_score": float(os.environ.get("MEMORY_MIN_SCORE", 0.15)),
+    "transcript_chars": 30000,
+}
+NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
+LESSON_RE = re.compile(r"^\[([a-z0-9][a-z0-9._-]*)\]\s+(.+?)\s*$", re.I)
+
+
+def log(*a):
+    print("[memory]", *a, file=sys.stderr)
+
+
+# ---------------------------------------------------------------- lock (single writer)
+class Lock:
+    def __init__(self, wait=20):
+        self.wait = wait
+    def __enter__(self):
+        ROOT.mkdir(parents=True, exist_ok=True)
+        for _ in range(self.wait * 10):
+            try:
+                LOCK.mkdir(); return self
+            except FileExistsError:
+                if time.time() - LOCK.stat().st_mtime > 600:   # stale lock from a crash
+                    LOCK.rmdir(); continue
+                time.sleep(0.1)
+        raise SystemExit("memory: lock held too long")
+    def __exit__(self, *e):
+        try: LOCK.rmdir()
+        except FileNotFoundError: pass
+
+
+# ---------------------------------------------------------------- store
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS lessons(
+  id TEXT PRIMARY KEY, project TEXT NOT NULL, text TEXT NOT NULL,
+  votes INTEGER DEFAULT 1, helpful INTEGER DEFAULT 0, harmful INTEGER DEFAULT 0,
+  first_seen TEXT, last_seen TEXT, superseded_by TEXT, state TEXT DEFAULT 'active', embedding BLOB);
+CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(id UNINDEXED, project UNINDEXED, text);
+CREATE TABLE IF NOT EXISTS sources(key TEXT PRIMARY KEY, cursor TEXT, seen TEXT);
+"""
+
+def db():
+    ROOT.mkdir(parents=True, exist_ok=True); DB.parent.mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(DB, timeout=30)
+    c.execute("PRAGMA journal_mode=WAL"); c.executescript(SCHEMA); c.row_factory = sqlite3.Row
+    return c
+
+def norm(t):
+    return re.sub(r"\s+", " ", t.strip().lower().rstrip("."))
+
+def lid(project, text):
+    return hashlib.sha1(f"{project}|{norm(text)}".encode()).hexdigest()[:10]
+
+def upsert(c, project, text):
+    """ADD-only. Exact duplicate → +1 vote. Returns (id, is_new)."""
+    project = project.lower(); text = text.strip()
+    i = lid(project, text); now = NOW()
+    row = c.execute("SELECT id FROM lessons WHERE id=?", (i,)).fetchone()
+    if row:
+        c.execute("UPDATE lessons SET votes=votes+1, last_seen=?, state=CASE WHEN state='archived' THEN 'active' ELSE state END WHERE id=?", (now, i))
+        return i, False
+    c.execute("INSERT INTO lessons(id,project,text,first_seen,last_seen) VALUES(?,?,?,?,?)", (i, project, text, now, now))
+    c.execute("INSERT INTO fts(id,project,text) VALUES(?,?,?)", (i, project, text))
+    return i, True
+
+def score(r, now_ts=None):
+    now_ts = now_ts or time.time()
+    last = datetime.fromisoformat(r["last_seen"]).timestamp()
+    age = max(0.0, (now_ts - last) / 86400)
+    base = r["votes"] + r["helpful"] - 2 * r["harmful"]
+    return base * (0.5 ** (age / CFG["half_life_days"]))
+
+
+# ---------------------------------------------------------------- Claude adapter
+def llm(prompt, system="You are a precise assistant. Output only what is asked.", max_tokens=1500):
+    """Returns text. Order: SDK (ANTHROPIC_API_KEY) → `claude -p` CLI (uses your subscription) → None."""
+    mode = CFG["llm"]
+    if mode == "none": return None
+    if mode in ("auto", "sdk") and os.environ.get("ANTHROPIC_API_KEY"):
+        try:
+            import anthropic
+            r = anthropic.Anthropic().messages.create(model=CFG["model"], max_tokens=max_tokens, system=system,
+                                                      messages=[{"role": "user", "content": prompt}])
+            return "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
+        except ImportError:
+            if mode == "sdk": raise SystemExit("pip install anthropic") from None
+    if mode in ("auto", "cli") and shutil.which("claude"):
+        env = {**os.environ, "MEMORY_REFLECT": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}  # hooks check MEMORY_REFLECT and exit
+        with tempfile.TemporaryDirectory() as d:  # empty cwd → no CLAUDE.md, no project memory loaded
+            r = subprocess.run(["claude", "-p", "--model", CFG["model"], "--output-format", "text"],
+                               input=f"{system}\n\n{prompt}", capture_output=True, text=True, env=env, cwd=d, timeout=180)
+        if r.returncode == 0: return r.stdout
+        log("claude -p failed:", r.stderr[:300])
+    return None
+
+def parse_json(text):
+    if not text: return None
+    m = re.search(r"\[.*\]|\{.*\}", text, re.S)
+    try: return json.loads(m.group(0)) if m else None
+    except json.JSONDecodeError: return None
+
+
+# ---------------------------------------------------------------- embeddings (optional)
+def embed(texts):
+    if CFG["embed"] == "none" or not texts: return [None] * len(texts)
+    if CFG["embed"] == "voyage":
+        url, key, model = "https://api.voyageai.com/v1/embeddings", os.environ.get("VOYAGE_API_KEY"), CFG["embed_model"] or "voyage-3.5"
+    else:
+        url, key, model = "https://api.openai.com/v1/embeddings", os.environ.get("OPENAI_API_KEY"), CFG["embed_model"] or "text-embedding-3-small"
+    if not key: log("no embedding API key; skipping"); return [None] * len(texts)
+    out = []
+    for i in range(0, len(texts), 64):
+        req = urllib.request.Request(url, data=json.dumps({"input": texts[i:i+64], "model": model}).encode(),
+                                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            out += [array("f", d["embedding"]).tobytes() for d in json.load(r)["data"]]
+    return out
+
+_dot = getattr(math, "sumprod", None) or (lambda x, y: sum(map(float.__mul__, x, y)))   # sumprod is 3.12+, ~10x faster
+
+def cosine(a, b):
+    x, y = array("f"), array("f"); x.frombytes(a); y.frombytes(b)
+    if not x or not y or len(x) != len(y): return 0.0
+    na, nb = math.sqrt(_dot(x, x)), math.sqrt(_dot(y, y))
+    return _dot(x, y) / (na * nb) if na and nb else 0.0
+
+def vector_rank(qe, rows, top=30):
+    """Rows sorted by cosine to qe. numpy if present (one matmul), else the stdlib path."""
+    try:
+        import numpy as np
+        M = np.frombuffer(b"".join(r["embedding"] for r in rows), dtype=np.float32).reshape(len(rows), -1)
+        q = np.frombuffer(qe, dtype=np.float32)
+        sims = (M @ q) / (np.linalg.norm(M, axis=1) * np.linalg.norm(q) + 1e-9)
+        return [rows[i] for i in np.argsort(-sims)[:top]]
+    except (ImportError, ValueError):
+        return sorted(rows, key=lambda r: -cosine(qe, r["embedding"]))[:top]
+
+def embed_missing(c):
+    rows = c.execute("SELECT id,text FROM lessons WHERE embedding IS NULL AND state='active'").fetchall()
+    if not rows or CFG["embed"] == "none": return
+    for r, e in zip(rows, embed([r["text"] for r in rows]), strict=True):
+        if e: c.execute("UPDATE lessons SET embedding=? WHERE id=?", (e, r["id"]))
+
+
+# ---------------------------------------------------------------- search (hybrid, RRF)
+def fts_query(q):
+    toks = re.findall(r"[A-Za-z0-9_.\-]+", q)
+    return " OR ".join(f'"{t}"' for t in toks) if toks else '""'
+
+def search(c, q, project=None, k=8, include_archived=False):
+    where = " AND l.state!='merged'" if include_archived else " AND l.state='active'"
+    pw, pa = ("", ()) if not project else (" AND l.project IN (?, 'all')", (project.lower(),))
+    ranks = {}
+    rows = c.execute(f"SELECT l.* FROM fts JOIN lessons l ON l.id=fts.id WHERE fts MATCH ?{where}{pw} ORDER BY bm25(fts) LIMIT 30",
+                     (fts_query(q), *pa)).fetchall()
+    for i, r in enumerate(rows): ranks[r["id"]] = ranks.get(r["id"], 0) + 1 / (60 + i)
+    if CFG["embed"] != "none":
+        qe = embed([q])[0]
+        if qe:
+            cand = c.execute(f"SELECT * FROM lessons l WHERE embedding IS NOT NULL{where}{pw}", pa).fetchall()
+            for i, r in enumerate(vector_rank(qe, cand)):
+                ranks[r["id"]] = ranks.get(r["id"], 0) + 1 / (60 + i)
+    if not ranks: return []
+    ids = sorted(ranks, key=ranks.get, reverse=True)[:k]
+    rows = {r["id"]: r for r in c.execute(f"SELECT * FROM lessons WHERE id IN ({','.join('?'*len(ids))})", ids)}
+    return [rows[i] for i in ids if i in rows]
+
+
+# ---------------------------------------------------------------- reflect (transcript → lessons)
+REFLECT_SYS = ("You extract durable, reusable lessons from a conversation between a user (Christopher) and an AI assistant. "
+               "A lesson is a fact, preference, correction, constraint, or decision that would change how the assistant acts in a FUTURE session. "
+               "Skip task progress, pleasantries, and anything only true today. Prefer exact tokens (flags, filenames, versions). "
+               "Never include secrets, credentials, health, or financial details. Output ONLY a JSON array of "
+               '{"project": "<slug>", "text": "<one sentence>"}; use "all" for cross-project lessons. Empty array if nothing durable.')
+
+def reflect(text, default_project, known_projects):
+    if not text.strip(): return []
+    out = llm(f"Known project slugs: {', '.join(sorted(known_projects | {default_project, 'all'}))}\n"
+              f"Default project for this conversation: {default_project}\n\n<conversation>\n{text[-CFG['transcript_chars']:]}\n</conversation>",
+              REFLECT_SYS)
+    items = parse_json(out) or []
+    return [(str(i.get("project") or default_project), str(i["text"])) for i in items if isinstance(i, dict) and i.get("text")]
+
+def known_projects(c):
+    return {r[0] for r in c.execute("SELECT DISTINCT project FROM lessons")}
+
+
+# ---------------------------------------------------------------- contradiction check (ADD-only supersession)
+CONTRA_SYS = ('Given a NEW lesson and CANDIDATE lessons from the same project, decide for each candidate: "same" (restates the new lesson), '
+              '"contradicts" (cannot both be true; the new one is more recent), or "unrelated". '
+              'Output ONLY JSON: {"same": ["id",...], "contradicts": ["id",...]}.')
+
+def reconcile(c, new_id):
+    r = c.execute("SELECT * FROM lessons WHERE id=?", (new_id,)).fetchone()
+    cands = [x for x in search(c, r["text"], r["project"], k=6) if x["id"] != new_id]
+    if not cands: return
+    out = parse_json(llm(f"NEW: {r['text']}\nCANDIDATES:\n" + "\n".join(f"{x['id']}: {x['text']}" for x in cands), CONTRA_SYS, 300)) or {}
+    for sid in out.get("same", []):
+        if any(x["id"] == sid for x in cands):  # merge: fold votes into the older, retire the new
+            c.execute("UPDATE lessons SET votes=votes+?, last_seen=? WHERE id=?", (r["votes"], NOW(), sid))
+            c.execute("UPDATE lessons SET state='merged', superseded_by=? WHERE id=?", (sid, new_id))
+            return
+    for cid in out.get("contradicts", []):
+        if any(x["id"] == cid for x in cands):
+            c.execute("UPDATE lessons SET state='superseded', superseded_by=? WHERE id=?", (new_id, cid))
+
+
+# ---------------------------------------------------------------- adapters
+def journal_write(lines, role="manual"):
+    """One new file per event; never appends. lines = ['[proj] text', ...].
+    Exclusive create ('x') plus a nanosecond stamp: two events in the same process, same tick, still get two files."""
+    if not lines: return None
+    d = JOURNAL / datetime.now().strftime("%Y-%m-%d"); d.mkdir(parents=True, exist_ok=True)
+    for n in range(1000):
+        p = d / f"{time.time_ns() + n}-{os.getpid()}-{role}.md"
+        try:
+            with open(p, "x") as f: f.write("\n".join(lines) + "\n")
+            return p
+        except FileExistsError: continue
+    raise RuntimeError("journal_write: could not allocate a unique filename")
+
+def ingest_journal(c):
+    """Every journal/**/*.md not yet seen. Files are immutable so (path) is the cursor."""
+    seen = {r[0] for r in c.execute("SELECT key FROM sources WHERE key LIKE 'journal:%'")}
+    new = []
+    for p in sorted(JOURNAL.glob("**/*.md")):
+        key = f"journal:{p.relative_to(JOURNAL)}"
+        if key in seen: continue
+        for line in p.read_text(errors="ignore").splitlines():
+            m = LESSON_RE.match(line.strip())
+            if m: new.append(upsert(c, m.group(1), m.group(2)))
+        c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, "", NOW()))
+    return new
+
+def claude_code_turns(path, start=0):
+    """Claude Code JSONL transcript → (text, end_offset). Incremental from byte offset."""
+    out = []
+    with open(path, "rb") as f:
+        f.seek(start)
+        for raw in f:
+            try: j = json.loads(raw)
+            except json.JSONDecodeError: continue
+            if j.get("type") not in ("user", "assistant"): continue
+            content = j.get("message", {}).get("content", "")
+            if isinstance(content, list):
+                content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+            if content.strip(): out.append(f"{j['type'].upper()}: {content.strip()}")
+        end = f.tell()
+    return "\n\n".join(out), end
+
+def ingest_transcript(c, path, project):
+    key = f"transcript:{path}"
+    row = c.execute("SELECT cursor FROM sources WHERE key=?", (key,)).fetchone()
+    text, end = claude_code_turns(path, int(row["cursor"]) if row and row["cursor"] else 0)
+    new = [upsert(c, p, t) for p, t in reflect(text, project, known_projects(c))]
+    c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, str(end), NOW()))
+    return new
+
+def export_msg_text(m):
+    """claude.ai export messages carry `text`, or `content: [{type: text, text}]` in newer exports."""
+    if m.get("text"): return m["text"]
+    return "\n".join(b.get("text", "") for b in m.get("content", []) if isinstance(b, dict) and b.get("type") == "text").strip()
+
+def ingest_export(c, path):
+    """claude.ai data export (conversations.json). Covers web, Desktop, mobile, Cowork chats."""
+    convs = json.loads(Path(path).read_text())
+    new = []
+    for cv in convs:
+        key = f"export:{cv.get('uuid')}"; upd = cv.get("updated_at", "")
+        row = c.execute("SELECT cursor FROM sources WHERE key=?", (key,)).fetchone()
+        if row and row["cursor"] == upd: continue
+        text = "\n\n".join(f"{m.get('sender','').upper()}: {t}" for m in cv.get("chat_messages", []) if (t := export_msg_text(m)))
+        slug = re.sub(r"[^a-z0-9]+", "-", (cv.get("name") or "all").lower()).strip("-")[:40] or "all"
+        new += [upsert(c, p, t) for p, t in reflect(text, slug, known_projects(c))]
+        c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, upd, NOW()))
+    return new
+
+
+# ---------------------------------------------------------------- learn (repos, notes, transcript backfill)
+DOC_GLOBS = ("README*", "CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md", "CHANGELOG.md", "HANDOFF.md", "docs/**/*.md", "*.md")
+DOC_MAX_CHARS = 20000
+
+def split_tagged(text):
+    """Lines of the form `[proj] fact` (optionally as a `- ` bullet) are lessons already; return them and the remaining prose."""
+    tagged, rest = [], []
+    for line in text.splitlines():
+        m = LESSON_RE.match(line.strip().lstrip("-* ").strip())
+        if m: tagged.append((m.group(1), m.group(2)))
+        else: rest.append(line)
+    return tagged, ("\n".join(rest).strip() if any(l.strip() for l in rest) else "")
+
+def sha(text): return hashlib.sha1(text.encode(errors="ignore")).hexdigest()[:12]
+
+def cursor(c, key):
+    r = c.execute("SELECT cursor FROM sources WHERE key=?", (key,)).fetchone()
+    return r["cursor"] if r else None
+
+def set_cursor(c, key, value):
+    c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, value, NOW()))
+
+def reflect_batches(c, chunks, project, label):
+    """Reflect a list of (name, text) in ~30k-char windows. Returns upsert results."""
+    new, buf, size = [], [], 0
+    def flush():
+        nonlocal buf, size
+        if buf:
+            text = "\n\n".join(f"### {n}\n{t}" for n, t in buf)
+            new.extend(upsert(c, p, t) for p, t in reflect(f"[{label}]\n{text}", project, known_projects(c)))
+            buf, size = [], 0
+    for name, text in chunks:
+        text = text[:DOC_MAX_CHARS]
+        if size + len(text) > CFG["transcript_chars"]: flush()
+        buf.append((name, text)); size += len(text)
+    flush()
+    return new
+
+def git(repo, *args):
+    r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else ""
+
+def git_ok(repo, *args):
+    """For commands whose success is silent (cat-file -e): the exit status, not stdout."""
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True).returncode == 0
+
+def repo_slug(path):
+    top = git(path, "rev-parse", "--show-toplevel").strip() or str(path)
+    return Path(top).name.lower()
+
+def learn_repo(c, path, since=None):
+    """Commit messages since the last seen hash, plus docs whose content hash changed. One Reflector batch per window."""
+    path = Path(path).expanduser().resolve(); project = repo_slug(path); new = []
+    head = git(path, "rev-parse", "HEAD").strip()
+    if head:
+        key = f"repo:{path}:commits"; last = cursor(c, key)
+        rng = f"{last}..HEAD" if last and git_ok(path, "cat-file", "-e", last) else "HEAD"   # a rewritten history falls back to full
+        args = ["log", rng, "--no-merges", "--format=%h %ad %s%n%b", "--date=short", "--reverse"]
+        if since and not last: args.append(f"--since={since}")
+        logtxt = git(path, *args).strip()
+        if logtxt and head != last:   # one chunk per commit, so a long history is windowed, not truncated
+            new += reflect_batches(c, [(f"commit {e.split()[0]}", e) for e in logtxt.split("\n\n") if e.strip()], project, f"git history of {project}")
+        set_cursor(c, key, head)
+    docs = []
+    for g in DOC_GLOBS:
+        for f in sorted(path.glob(g)):
+            if not f.is_file() or ".git" in f.parts or f.stat().st_size > 2_000_000: continue
+            rel = str(f.relative_to(path)); text = f.read_text(errors="ignore")
+            key = f"repo:{path}:doc:{rel}"; h = sha(text)
+            if cursor(c, key) == h: continue
+            tagged, rest = split_tagged(text)
+            new += [upsert(c, pr, t) for pr, t in tagged]
+            if rest: docs.append((rel, rest))
+            set_cursor(c, key, h)
+    if docs:
+        new += reflect_batches(c, docs, project, f"documentation of {project}")
+    return new
+
+def learn_notes(c, folder, project=None):
+    """Every .md/.txt under folder. `[proj] fact` lines are ingested directly; everything else goes to the Reflector."""
+    folder = Path(folder).expanduser().resolve(); project = (project or folder.name).lower(); new, prose = [], []
+    for f in sorted(list(folder.rglob("*.md")) + list(folder.rglob("*.txt"))):
+        if not f.is_file(): continue
+        text = f.read_text(errors="ignore"); key = f"notes:{f}"; h = sha(text)
+        if cursor(c, key) == h: continue
+        tagged, rest = split_tagged(text)
+        new += [upsert(c, pr, t) for pr, t in tagged]
+        if rest: prose.append((str(f.relative_to(folder)), rest))
+        set_cursor(c, key, h)
+    if prose: new += reflect_batches(c, prose, project, f"notes in {folder.name}")
+    return new
+
+def claude_code_project_dirs(root=None):
+    """~/.claude/projects/<encoded-cwd>/ → (project slug, [transcript paths]). The dir name is the cwd with '/' → '-'."""
+    root = Path(root or Path.home() / ".claude" / "projects")
+    for d in sorted(root.glob("*/")):
+        slug = d.name.rstrip("-").rsplit("-", 1)[-1].lower() or "all"
+        yield slug, sorted(d.glob("*.jsonl"))
+
+def learn_transcripts(c, root=None):
+    new = []
+    for slug, files in claude_code_project_dirs(root):
+        for f in files: new += ingest_transcript(c, f, slug)
+    return new
+
+def learn_all(c, repos_root=None, notes=None, exports=None):
+    new = learn_transcripts(c)
+    for r in sorted(Path(repos_root).expanduser().glob("*/")) if repos_root else []:
+        if (r / ".git").exists(): new += learn_repo(c, r)
+    if notes and Path(notes).expanduser().exists(): new += learn_notes(c, notes)
+    for e in sorted(Path(exports).expanduser().glob("*.json")) if exports else []:
+        new += ingest_export(c, e)
+    return new
+
+
+# ---------------------------------------------------------------- compile + prune
+def prune(c):
+    now = time.time(); archived = []
+    for r in c.execute("SELECT * FROM lessons WHERE state='active'").fetchall():
+        if r["harmful"] >= 2 or score(r, now) < CFG["min_score"]:
+            c.execute("UPDATE lessons SET state='archived' WHERE id=?", (r["id"],)); archived.append(r)
+    if archived:
+        ARCHIVE.mkdir(exist_ok=True)
+        with open(ARCHIVE / f"{datetime.now():%Y-%m}.md", "a") as f:
+            for r in archived: f.write(f"- [{r['project']}] {r['text']}  <!-- {r['id']} votes={r['votes']} last={r['last_seen'][:10]} -->\n")
+    return len(archived)
+
+def atomic_write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp"); tmp.write_text(text); os.replace(tmp, path)
+
+def compile_(c):
+    n_pruned = prune(c)
+    rows = c.execute("SELECT * FROM lessons WHERE state='active'").fetchall()
+    now = time.time(); rows.sort(key=lambda r: -score(r, now))
+    by = {}
+    for r in rows: by.setdefault(r["project"], []).append(r)
+    fmt = lambda r: f"- ({r['votes']}) {r['text']}"
+    atomic_write(COMPILED / "PLAYBOOK.md", "\n".join(fmt(r) for r in by.get("all", [])[:CFG["max_lines"]]) + "\n")
+    for proj, rs in by.items():
+        if proj != "all": atomic_write(COMPILED / "projects" / f"{proj}.md", "\n".join(fmt(r) for r in rs[:CFG["max_lines"]]) + "\n")
+    for p in (COMPILED / "projects").glob("*.md"):   # remove compiled files for projects with no active lessons
+        if p.stem not in by: p.unlink()
+    if shutil.which("git") and (ROOT / ".git").exists():
+        subprocess.run(["git", "-C", str(ROOT), "add", "-A"], capture_output=True)
+        subprocess.run(["git", "-C", str(ROOT), "commit", "-qm", f"compile {NOW()}"], capture_output=True)
+    return len(rows), n_pruned
+
+def post_ingest(c, new):
+    embed_missing(c)
+    for i, is_new in new:
+        if is_new: reconcile(c, i)
+
+
+# ---------------------------------------------------------------- commands
+def cmd_hook(a):
+    if os.environ.get("MEMORY_REFLECT"): return          # we are inside our own `claude -p`; do nothing
+    j = json.load(open(a.input)) if a.input else json.load(sys.stdin)
+    msg = j.get("last_assistant_message", "") or ""
+    lines = [l.strip() for l in msg.split("LESSONS:", 1)[1].splitlines() if LESSON_RE.match(l.strip())] if "LESSONS:" in msg else []
+    journal_write(lines, a.role)
+    project = a.project or Path(j.get("cwd") or os.getcwd()).name.lower()
+    with Lock(), db() as c:
+        new = ingest_journal(c)
+        tp = j.get("transcript_path")
+        if tp and Path(tp).exists() and CFG["llm"] != "none":
+            new += ingest_transcript(c, tp, project)
+        post_ingest(c, new); c.commit()
+        n, p = compile_(c); c.commit()
+    log(f"hook {a.role}: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned")
+
+def cmd_ingest(a):
+    with Lock(), db() as c:
+        new = ingest_journal(c)
+        if a.transcript: new += ingest_transcript(c, a.transcript, a.project or "all")
+        if a.export: new += ingest_export(c, a.export)
+        post_ingest(c, new); c.commit()
+        n, p = compile_(c); c.commit()
+    log(f"ingest: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned")
+
+def cmd_learn(a):
+    """Read everything once, then only what changed. Idempotent; cursors live in `sources`."""
+    with Lock(), db() as c:
+        new = ingest_journal(c)
+        if a.all: new += learn_all(c, a.repos or (Path.home() / "GitHub"), a.notes, a.exports or (ROOT / "exports"))
+        for r in a.repo or []: new += learn_repo(c, r, a.since)
+        if a.notes and not a.all: new += learn_notes(c, a.notes, a.project)
+        if a.transcripts and not a.all: new += learn_transcripts(c)
+        for e in a.export or []: new += ingest_export(c, e)
+        post_ingest(c, new); c.commit()
+        n, p = compile_(c); c.commit()
+    log(f"learn: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned")
+
+def cmd_compile(a):
+    with Lock(), db() as c:
+        embed_missing(c); n, p = compile_(c); c.commit()
+    log(f"compile: {n} active, {p} pruned")
+
+def cmd_search(a):
+    with db() as c:
+        for r in search(c, a.query, a.project, a.k, a.all):
+            print(f"{r['id']}  ({r['votes']}) [{r['project']}] {r['text']}")
+
+def cmd_remember(a):
+    p = journal_write([f"[{a.project}] {a.text}"], "manual")
+    with Lock(), db() as c:
+        new = ingest_journal(c); post_ingest(c, new); c.commit(); compile_(c); c.commit()
+    log(f"remembered → {p.name}")
+
+def cmd_vote(a):
+    col = "helpful" if a.helpful else "harmful"
+    with Lock(), db() as c:
+        c.execute(f"UPDATE lessons SET {col}={col}+1 WHERE id=?", (a.id,)); c.commit(); compile_(c); c.commit()
+
+def cmd_mcp(a):
+    """MCP server. Works with mcp 1.x (FastMCP) and 2.x (MCPServer)."""
+    try:
+        from mcp.server.mcpserver import MCPServer as Server; v2 = True
+    except ImportError:
+        try:
+            from mcp.server.fastmcp import FastMCP as Server; v2 = False
+        except ImportError: raise SystemExit("pip install mcp") from None
+    srv = Server("memory") if v2 else Server("memory", host="0.0.0.0", port=a.port)
+
+    @srv.tool()
+    def recall(query: str, project: str = "", k: int = 8) -> str:
+        """Search Christopher's long-term memory. Returns ranked lessons with ids."""
+        with db() as c:
+            rs = search(c, query, project or None, k)
+        return "\n".join(f"{r['id']} ({r['votes']}) [{r['project']}] {r['text']}" for r in rs) or "no matches"
+
+    @srv.tool()
+    def remember(text: str, project: str = "all") -> str:
+        """Save one durable lesson. project = slug or 'all'."""
+        journal_write([f"[{project}] {text}"], "mcp")
+        with Lock(), db() as c:
+            new = ingest_journal(c); post_ingest(c, new); c.commit(); compile_(c); c.commit()
+        return f"saved to {project}"
+
+    @srv.tool()
+    def feedback(lesson_id: str, helpful: bool = True) -> str:
+        """Mark a recalled lesson as helpful or harmful (harmful x2 archives it)."""
+        col = "helpful" if helpful else "harmful"
+        with Lock(), db() as c:
+            c.execute(f"UPDATE lessons SET {col}={col}+1 WHERE id=?", (lesson_id,)); c.commit(); compile_(c); c.commit()
+        return "ok"
+
+    if a.transport == "http":
+        srv.run(transport="streamable-http", host="0.0.0.0", port=a.port) if v2 else srv.run(transport="streamable-http")
+    else:
+        srv.run(transport="stdio")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="memory"); sp = ap.add_subparsers(dest="cmd", required=True)
+    s = sp.add_parser("hook"); s.add_argument("--role", default="main"); s.add_argument("--input"); s.add_argument("--project"); s.set_defaults(f=cmd_hook)
+    s = sp.add_parser("ingest"); s.add_argument("--transcript"); s.add_argument("--project"); s.add_argument("--export"); s.set_defaults(f=cmd_ingest)
+    s = sp.add_parser("learn", help="read repos, notes, transcripts and exports; only what changed since last time")
+    s.add_argument("--all", action="store_true", help="transcripts + every git repo under --repos + --notes + exports/")
+    s.add_argument("--repos", help="folder of git repos for --all (default ~/GitHub)")
+    s.add_argument("--repo", action="append", help="one git repo: commit messages + docs")
+    s.add_argument("--since", help="first-time commit window for --repo, e.g. 2025-01-01")
+    s.add_argument("--notes", help="folder of .md/.txt notes")
+    s.add_argument("--project", help="project slug for --notes (default: folder name)")
+    s.add_argument("--transcripts", action="store_true", help="backfill every Claude Code transcript under ~/.claude/projects")
+    s.add_argument("--export", action="append", help="claude.ai conversations.json")
+    s.add_argument("--exports", help="folder of exports for --all (default $MEMORY_ROOT/exports)")
+    s.set_defaults(f=cmd_learn)
+    s = sp.add_parser("compile"); s.set_defaults(f=cmd_compile)
+    s = sp.add_parser("search"); s.add_argument("query"); s.add_argument("--project"); s.add_argument("-k", type=int, default=8); s.add_argument("--all", action="store_true"); s.set_defaults(f=cmd_search)
+    s = sp.add_parser("remember"); s.add_argument("text"); s.add_argument("--project", default="all"); s.set_defaults(f=cmd_remember)
+    s = sp.add_parser("vote"); s.add_argument("id"); g = s.add_mutually_exclusive_group(required=True); g.add_argument("--helpful", action="store_true"); g.add_argument("--harmful", action="store_true"); s.set_defaults(f=cmd_vote)
+    s = sp.add_parser("mcp"); s.add_argument("--transport", choices=["stdio", "http"], default="stdio"); s.add_argument("--port", type=int, default=8765); s.set_defaults(f=cmd_mcp)
+    a = ap.parse_args(); a.f(a)
+
+if __name__ == "__main__":
+    main()

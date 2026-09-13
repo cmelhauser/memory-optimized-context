@@ -1,0 +1,10 @@
+# Lint configuration.
+#
+# Narrow by design: syntax errors, pyflakes and bugbear. Those catch defects. `bin/memory` is a
+# single 400-line file with deliberately dense one-liners; the wider style rules were measured
+# against it and would force reformatting without catching anything.
+line-length = 160
+extend-include = ["bin/memory"]
+
+[lint]
+select = ["E9", "F", "B"]

@@ -1,0 +1,5 @@
+{ "hooks": {
+  "SessionStart": [{ "hooks": [{ "type": "command", "command": "~/GitHub/memory-optimized-context/hooks/compile.sh" }] }],
+  "Stop":         [{ "hooks": [{ "type": "command", "command": "~/GitHub/memory-optimized-context/hooks/journal.sh main" }] }],
+  "SubagentStop": [{ "hooks": [{ "type": "command", "command": "~/GitHub/memory-optimized-context/hooks/journal.sh sub" }] }]
+}}
