@@ -4,40 +4,52 @@
 no memory of this project and no access to any prior session. Everything you need is in this
 repository. Read this file, then `AGENTS.md`, then `CLAUDE.md`.
 
-Last updated 13 September 2026, after the review pass to full coverage.
+Last updated 14 September 2026, when #1 and #2 were merged.
 
 ## State
 
-`v0.1.0` plus the unreleased work in `CHANGELOG.md`, in two open pull requests:
+`v0.1.0` plus the unreleased work in `CHANGELOG.md`, on `main`:
 
 - #1: the backfill fixes and the native default.
-- #2, stacked on #1: the Reflector-failure fix, `tools/e2e.sh`, and the review pass (full
-  coverage, the wider lint, the lock under a long `learn`).
+- #2: the Reflector-failure fix, `tools/e2e.sh`, and the review pass (full coverage, the wider
+  lint, the lock under a long `learn`).
 
-Neither is merged. This session's permission settings refuse `gh pr merge`, so merging is the
-Human Author's step. The suite has 76 tests at 100 per cent of lines and branches, and
-`tools/e2e.sh` passes its 41 checks on the Mac mini. Nothing has run against a real `~/memory`
-store, and nothing is installed on the Mac mini: no `~/memory`, no hooks in
+Both were squash-merged on 14 September 2026. The suite has 76 tests at 100 per cent of lines
+and branches, and `tools/e2e.sh` passes its 41 checks on the Mac mini. Nothing has run against a
+real `~/memory` store, and nothing is installed on the Mac mini: no `~/memory`, no hooks in
 `~/.claude/settings.json`, no MCP registration, no container.
 
 ## Next steps, in order
 
-1. Merge #1, then #2; #2 retargets to `main` when #1's branch is deleted. After each, confirm CI
-   on `main` is green, including the `container` job, which pull requests do not run.
-2. Wait for Bitcoin Core's initial block download and Fulcrum's indexing to finish.
-3. Install natively, as the README says: `tools/init_store.sh`; the three hooks from
+1. Wait for Bitcoin Core's initial block download and Fulcrum's indexing to finish.
+2. Install natively, as the README says: `tools/init_store.sh`; the three hooks from
    `hooks/settings.snippet.json` in `~/.claude/settings.json`; optionally the `.venv`, then
-   `claude mcp add` and `examples/claude_desktop_config.native.json` for the MCP server.
-4. Add `@~/memory/compiled/projects/<slug>.md` to each project's `CLAUDE.md`.
-5. Backfill. Start with one repository (`learn --repo`) and read `compiled/projects/`, to judge
+   `claude mcp add` and `examples/claude_desktop_config.native.json` for the MCP server. The
+   Docker install is not needed; on the Mac mini it would first need Docker Desktop's builder
+   working again (see the log).
+3. Add `@~/memory/compiled/projects/<slug>.md` to each project's `CLAUDE.md`.
+4. Backfill. Start with one repository (`learn --repo`) and read `compiled/projects/`, to judge
    the Reflector prompt before it runs over everything. Then `learn --all`: a usage limit stops
    it, and running it again resumes. Pass no `--notes` folder the Human Author has not named.
-6. After a month of real journals, settle what is listed under "What is not settled". Cut 0.2.0
+5. After a month of real journals, settle what is listed under "What is not settled". Cut 0.2.0
    as `RELEASING.md` describes when the Human Author wants a release.
 
 ## Handoff log
 
 Newest first.
+
+### 14 September 2026 — #1 and #2 merged
+
+- Both pull requests were squash-merged into `main`, #1 as `2a07963`, each with a message
+  written for `main`.
+- Before #2 was merged, its final tree passed the whole CI set under `workflow_dispatch`,
+  Python 3.10 to 3.13 and the `container` job included.
+- Docker Desktop's builder on the Mac mini now times out loading the base image's metadata
+  (`DeadlineExceeded`), although the host reaches Docker Hub. The image built there on
+  13 September and builds on GitHub. Restarting Docker Desktop is the likely fix; other
+  containers run there, so the restart is the Human Author's call. The native install does not
+  need it.
+- Nothing was run against the real store. The Bitcoin Core and Fulcrum rule still stands.
 
 ### 13 September 2026 — review pass to full coverage
 
