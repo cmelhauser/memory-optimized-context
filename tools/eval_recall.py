@@ -15,8 +15,10 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 def load_memory():
-    candidates = [REPO / "bin" / "memory", pathlib.Path(__file__).resolve().parent / "memory"]
-    path = next(p for p in candidates if p.exists())
+    candidates = [REPO / "bin" / "memory", pathlib.Path(__file__).resolve().parent / "memory"]   # the checkout, or the image's /app
+    path = next((p for p in candidates if p.exists()), None)
+    if path is None:
+        sys.exit(f"eval_recall: no bin/memory at {candidates[0]} or {candidates[1]}")
     loader = importlib.machinery.SourceFileLoader("memory_cli", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
@@ -44,7 +46,7 @@ def main(argv=None):
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--min", type=float, default=0.0)
     a = ap.parse_args(argv)
-    questions = [json.loads(l) for l in pathlib.Path(a.questions).read_text().splitlines() if l.strip()]
+    questions = [json.loads(line) for line in pathlib.Path(a.questions).read_text().splitlines() if line.strip()]
     if not questions:
         sys.exit("no questions")
     m = load_memory()

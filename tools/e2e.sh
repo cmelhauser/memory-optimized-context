@@ -38,8 +38,8 @@ checkout() {  # dir [.env text]: hooks/ and bin/ copied, so the runner's choice 
 }
 store_checks() {  # phase home tag log
   local c=$2/memory/compiled/projects
-  check "$1: us-hail-cat-model.md has the reflected lesson" "grep -q '$3 lesson for us-hail-cat-model' '$c/us-hail-cat-model.md'"
-  check "$1: the README's tagged line was ingested with no LLM call, once" "grep -qx -- '- (1) tagged fact from the README' '$c/us-hail-cat-model.md'"
+  check "$1: flood-risk-model.md has the reflected lesson" "grep -q '$3 lesson for flood-risk-model' '$c/flood-risk-model.md'"
+  check "$1: the README's tagged line was ingested with no LLM call, once" "grep -qx -- '- (1) tagged fact from the README' '$c/flood-risk-model.md'"
   check "$1: the worktree session is filed under doc-ingestion" "grep -q '$3 lesson for doc-ingestion' '$c/doc-ingestion.md'"
   check "$1: no collapsed slugs (model, ingestion, 15cf91)" "! ls '$c' | grep -qxE 'model.md|ingestion.md|15cf91.md|fervent-fermat-15cf91.md'"
   check "$1: each of the 160 turns of the long transcript reached the Reflector once" "'$PY' '$E/markers.py' '$4'"
@@ -92,7 +92,7 @@ out=$(E2E_FAIL_ON="[documentation of" "${LEARN[@]}" 2>&1); rc=$?
 [ "$rc" -ne 0 ] && grep -q 'stopped early' <<<"$out"; verdict "resume: the rerun carried on, then a limit at the docs stopped it" $?
 out=$("${LEARN[@]}" 2>&1); rc=$?
 verdict "resume: the third run finished" "$rc"
-check "resume: the commits and the docs were each reflected once" "[ \"\$(grep -c 'git history of us-hail-cat-model' '$W/cli3.log')\" -eq 1 ] && [ \"\$(grep -c 'documentation of us-hail-cat-model' '$W/cli3.log')\" -eq 1 ]"
+check "resume: the commits and the docs were each reflected once" "[ \"\$(grep -c 'git history of flood-risk-model' '$W/cli3.log')\" -eq 1 ] && [ \"\$(grep -c 'documentation of flood-risk-model' '$W/cli3.log')\" -eq 1 ]"
 store_checks resume "$H" cli "$W/cli3.log"
 
 skip=""

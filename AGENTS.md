@@ -6,14 +6,14 @@ two overlap.
 
 ## What this project is
 
-A single-file personal memory system for Claude. `bin/memory` (about 490 lines, standard
+A single-file personal memory system for Claude. `bin/memory` (about 740 lines, standard
 library only) owns a SQLite store, an append-only journal, a locked compiler, a Reflector that
 calls Claude to extract lessons from transcripts, a contradiction check, a pruner, hybrid
 search, and an MCP server. Two shell hooks, sharing `hooks/runner.sh`, connect it to Claude
 Code. It runs natively by default, reflecting through `claude -p`; a Dockerfile and Compose file
-run it in a container on the Mac mini when an API key is configured. Fifty-eight tests cover it
-at 93 per cent, including a six-process concurrency test, and `tools/e2e.sh` runs both installs
-end to end against a fake Reflector.
+run it in a container on the Mac mini when an API key is configured. Seventy-six tests cover it
+at 100 per cent of lines and branches, including a six-process concurrency test, and
+`tools/e2e.sh` runs both installs end to end against a fake Reflector.
 
 The Human Author is Christopher Melhauser (`christopher.melhauser@gmail.com`); the AI
 Collaborator is theonlymuffinbot (`theonlymuffinbot@outlook.com`), using Anthropic Claude. See
@@ -38,6 +38,11 @@ Collaborator is theonlymuffinbot (`theonlymuffinbot@outlook.com`), using Anthrop
    `README.md`, `AGENTS.md`, `HANDOFF.md`, `CHANGELOG.md` and `RELEASING.md` must move with it.
 8. **`main` takes no direct commits.** Branch, open a pull request, let CI run. See
    `RELEASING.md`.
+9. **Keep coverage whole.** `.coveragerc` holds `bin/memory`, `tools/check_docs.py` and
+   `tools/eval_recall.py` to 100 per cent of lines and branches with nothing excluded. New code
+   arrives with the test that runs it; never add an exclusion to get past the gate.
+10. **Name nothing private.** The repository is public. Tests, fixtures, prose and pull requests
+    use neutral names, never the operator's own repositories, folders or conversations.
 
 ## Where things are
 
@@ -51,7 +56,7 @@ Collaborator is theonlymuffinbot (`theonlymuffinbot@outlook.com`), using Anthrop
 | `tools/check_docs.py` | prose counts, version, links and paths re-derived from the tree |
 | `tools/eval_recall.py`, `eval/` | recall@k against a frozen question set |
 | `tools/init_store.sh`, `tools/bootstrap.sh` | create the store; publish the repository |
-| `examples/` | snippets for claude.ai, `CLAUDE.md`, Claude Desktop |
+| `examples/` | snippets for claude.ai, `CLAUDE.md`, Claude Desktop (native and Docker) |
 | `docs/` | architecture, concurrency audit, research notes, decision records, diagrams |
 | `Dockerfile`, `docker-compose.yml` | the container |
 | `README.md` | install and operation |

@@ -2,7 +2,8 @@
 
 Read `AGENTS.md` first; this file is the long form. Work directly in this repository. Preserve
 unrelated user work. Never commit a home directory path: the Compose file uses `${HOME}` and the
-hooks use `$HOME` for that reason.
+hooks use `$HOME` for that reason. Never commit the name of anything private to the operator
+either; the repository is public.
 
 ## Authority
 
@@ -24,6 +25,14 @@ before editing either.
   six and leave no `.lock` behind.
 - A superseded or archived lesson is absent from `compiled/` and from default search, and
   present in `search --all`.
+- No cursor moves past text the Reflector did not answer. A resumed `learn` sends each
+  transcript turn, commit and doc to the Reflector once, and counts a doc's tagged lines once.
+- A transcript's project is the `cwd` recorded in it, through `project_of()`, the same slug for
+  the Stop hook and the backfill; a Claude Code worktree counts as its repository.
+- A writer that cannot get the lock raises `LockBusy`; the MCP tools answer "busy" and the
+  server keeps running.
+- Coverage is 100 per cent of lines and branches over `bin/memory`, `tools/check_docs.py` and
+  `tools/eval_recall.py`, with nothing excluded in `.coveragerc`.
 
 ## Things that look like bugs and are not
 
@@ -33,6 +42,18 @@ before editing either.
   the pruner working, not data loss; the lessons are in `archive/` and the database.
 - The hooks discard the exit status of the background job. A hook that fails must never fail
   Claude Code's turn; failures go to `~/memory/hook.log`.
+- `learn` exits non-zero after a Reflector failure and leaves some cursors short of the end.
+  That is the resume point; running it again carries on from there.
+- A doc's cursor can read `tagged:<hash>`: its `[project] fact` lines are in, and its prose is
+  still owed to the Reflector.
+- Compose refuses to start without `.env`. Without a key the install is native
+  (`hooks/runner.sh`), and a container without one would have no Reflector.
+- The hooks choose Docker from a key in this checkout's `.env`, not from an exported
+  `ANTHROPIC_API_KEY`; an exported key serves the native install's SDK path instead.
+- During a long `learn` the SessionStart hook gives up on the lock after 2 s, so `compiled/` can
+  be one compile behind when a session starts.
+- A Reflector answer with no JSON array in it counts as "no lessons", not as a failure, so one
+  odd answer cannot stall a backfill.
 
 ## Synchronisation rule
 

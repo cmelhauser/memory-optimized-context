@@ -21,17 +21,17 @@ def transcript(path, cwd, turns):
             f.write(json.dumps({"type": role, "cwd": str(cwd), "message": {"role": role, "content": content}}) + "\n")
 
 
-hail = home / "GitHub" / "us-hail-cat-model"
+repo = home / "GitHub" / "flood-risk-model"
 worktree = home / "GitHub" / "doc-ingestion" / ".claude" / "worktrees" / "fervent-fermat-15cf91"
 projects = home / ".claude" / "projects"
-transcript(projects / encoded(hail) / "long.jsonl", hail, [f"M{i:03d} " + "hail modelling detail " * 28 for i in range(160)])
+transcript(projects / encoded(repo) / "long.jsonl", repo, [f"M{i:03d} " + "flood modelling detail " * 27 for i in range(160)])
 transcript(projects / encoded(worktree) / "w.jsonl", worktree, ["please fix the parser", "fixed the parser"])
 
-hail.mkdir(parents=True)
-(hail / "README.md").write_text("# us-hail-cat-model\n\n- [us-hail-cat-model] tagged fact from the README\n\nProse.\n")
-git = ["git", "-C", str(hail)]
+repo.mkdir(parents=True)
+(repo / "README.md").write_text("# flood-risk-model\n\n- [flood-risk-model] tagged fact from the README\n\nProse.\n")
+git = ["git", "-C", str(repo)]
 subprocess.run([*git, "init", "-q", "-b", "main"], check=True)
 for i in range(3):
-    (hail / f"f{i}").write_text(str(i))
+    (repo / f"f{i}").write_text(str(i))
     subprocess.run([*git, "add", "-A"], check=True)
-    subprocess.run([*git, "commit", "-qm", f"commit {i}: calibrate hail curve"], check=True)
+    subprocess.run([*git, "commit", "-qm", f"commit {i}: calibrate the flood curve"], check=True)

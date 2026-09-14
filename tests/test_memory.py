@@ -7,9 +7,11 @@ The one thing these tests cannot do is call Claude; `llm()` itself is covered by
 """
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import pathlib
+import runpy
 import shutil
 import sqlite3
 import subprocess
@@ -17,6 +19,7 @@ import sys
 import threading
 import time
 import types
+import urllib.error
 
 import pytest
 
@@ -182,7 +185,7 @@ def test_git_commit_on_compile_when_repo_present(m):
     subprocess.run(["git", "-C", str(m.ROOT), "config", "user.name", "t"], check=True)
     journal(m, ["[all] committed"])
     run_ingest(m)
-    log = subprocess.run(["git", "-C", str(m.ROOT), "log", "--oneline"], capture_output=True, text=True).stdout
+    log = subprocess.run(["git", "-C", str(m.ROOT), "log", "--oneline"], capture_output=True, text=True, check=True).stdout
     assert "compile" in log
 
 
@@ -300,7 +303,7 @@ def test_same_merges_votes_into_the_older_lesson(m, monkeypatch):
 
 def test_reconcile_ignores_ids_not_among_candidates(m, monkeypatch):
     with m.db() as c:
-        old, _ = m.upsert(c, "p", "alpha")
+        m.upsert(c, "p", "alpha")
         c.commit()
     monkeypatch.setattr(m, "llm", fake_llm([], {"same": ["bogus"], "contradicts": ["bogus"]}))
     journal(m, ["[p] alpha beta"])
@@ -381,7 +384,7 @@ def test_prune_archives_by_decay_and_harm(m):
         c.commit()
         m.compile_(c)
     assert (m.COMPILED / "PLAYBOOK.md").read_text() == "- (1) fresh\n"
-    archive = list(m.ARCHIVE.glob("*.md"))[0].read_text()
+    archive = next(m.ARCHIVE.glob("*.md")).read_text()
     assert "stale" in archive and "harmful" in archive
 
 
@@ -525,9 +528,12 @@ def test_eval_recall_reports_hits_and_misses(m, tmp_path, capsys):
     assert eval_recall.main([str(q), "--min", "0.5"]) == 0
 
 
-def test_check_docs_passes_on_this_tree():
-    r = subprocess.run([sys.executable, str(REPO / "tools" / "check_docs.py")], capture_output=True, text=True, cwd=REPO)
-    assert r.returncode == 0, r.stdout + r.stderr
+def test_check_docs_passes_on_this_tree(monkeypatch, capsys):
+    """In-process, so tools/check_docs.py is measured like the tool itself."""
+    monkeypatch.setattr(sys, "argv", ["check_docs.py"])
+    with pytest.raises(SystemExit) as e:
+        runpy.run_path(str(REPO / "tools" / "check_docs.py"), run_name="__main__")
+    assert e.value.code == 0, capsys.readouterr().out
 
 
 # ------------------------------------------------------------------ learn adapters
@@ -551,7 +557,7 @@ def tracing_llm(calls):
         calls.append(prompt)
         if "CANDIDATES:" in prompt:
             return '{"same": [], "contradicts": []}'
-        found = [l for l in prompt.splitlines() if l.startswith("[") and l.endswith("]")]
+        found = [ln for ln in prompt.splitlines() if ln.startswith("[") and ln.endswith("]")]
         label = found[0].strip("[]") if found else "transcript"
         proj = prompt.split("Default project for this conversation: ", 1)[1].split("\n", 1)[0]
         return json.dumps([{"project": proj, "text": f"lesson from {label}"}])
@@ -620,23 +626,23 @@ def test_learn_transcripts_backfills_claude_code_dirs(m, tmp_path, monkeypatch):
     """The slug comes from the cwd recorded in the transcript. The folder name cannot be decoded:
     three hyphenated repositories ending in -model once all became `model`."""
     root = tmp_path / "projects"
-    sessions = {"-home-me-GitHub-us-hail-cat-model": "/home/me/GitHub/us-hail-cat-model",
-                "-home-me-GitHub-us-hurricane-cat-model": "/home/me/GitHub/us-hurricane-cat-model",
+    sessions = {"-home-me-GitHub-flood-risk-model": "/home/me/GitHub/flood-risk-model",
+                "-home-me-GitHub-wind-risk-model": "/home/me/GitHub/wind-risk-model",
                 "-home-me-GitHub-doc-ingestion--claude-worktrees-fervent-fermat-15cf91":
                     "/home/me/GitHub/doc-ingestion/.claude/worktrees/fervent-fermat-15cf91"}
     for enc, cwd in sessions.items():
         (root / enc).mkdir(parents=True)
         transcript(root / enc / "s1.jsonl", [("user", "x"), ("assistant", "y")], cwd=cwd)
-    transcript(root / "-home-me-GitHub-us-hail-cat-model" / "s2.jsonl", [("user", "p"), ("assistant", "q")],
-               cwd="/home/me/GitHub/us-hail-cat-model")
+    transcript(root / "-home-me-GitHub-flood-risk-model" / "s2.jsonl", [("user", "p"), ("assistant", "q")],
+               cwd="/home/me/GitHub/flood-risk-model")
     (root / "-home-me-other-").mkdir()          # no transcript, so no recorded cwd: the folder name stands in
     monkeypatch.setattr(m, "llm", tracing_llm([]))
     assert [s for s, _ in m.claude_code_project_dirs(root)] == \
-        ["doc-ingestion", "us-hail-cat-model", "us-hurricane-cat-model", "other"]
+        ["doc-ingestion", "flood-risk-model", "wind-risk-model", "other"]
     with m.db() as c:
         m.learn_transcripts(c, root)
         assert {r[0]: r[1] for r in c.execute("SELECT project, votes FROM lessons")} == \
-            {"us-hail-cat-model": 2, "us-hurricane-cat-model": 1, "doc-ingestion": 1}
+            {"flood-risk-model": 2, "wind-risk-model": 1, "doc-ingestion": 1}
         assert c.execute("SELECT count(*) FROM sources WHERE key LIKE 'transcript:%'").fetchone()[0] == 4
 
 
@@ -652,7 +658,7 @@ def test_hook_files_a_worktree_session_under_its_repository(m, tmp_path, monkeyp
     m.main.__globals__["sys"].argv = ["memory", "hook", "--input", str(p)]
     m.main()
     assert (m.COMPILED / "projects" / "doc-ingestion.md").read_text() == "- (1) reflected\n"
-    assert m.project_of("/home/me/GitHub/us-hail-cat-model") == "us-hail-cat-model"
+    assert m.project_of("/home/me/GitHub/flood-risk-model") == "flood-risk-model"
     assert m.project_of("/home/me/GitHub/doc-ingestion/.claude/worktrees/x/src") == "doc-ingestion"
 
 
@@ -737,11 +743,11 @@ def test_hook_runner_is_native_without_an_api_key_and_docker_with_one(tmp_path):
         subprocess.run(["bash", str(repo / "hooks" / "compile.sh")], env=env, check=True, timeout=5)
         return log.read_text()
 
-    assert runner() == f"python3 {repo}/bin/memory ingest\n"
+    assert runner() == f"python3 {repo}/bin/memory ingest --wait 2\n"
     (repo / ".env").write_text("ANTHROPIC_API_KEY=sk-ant-...\n")   # the .env.example placeholder is not a key
-    assert runner() == f"python3 {repo}/bin/memory ingest\n"
+    assert runner() == f"python3 {repo}/bin/memory ingest --wait 2\n"
     (repo / ".env").write_text("MEMORY_EMBED=none\nANTHROPIC_API_KEY=sk-ant-api03-abc\n")
-    assert runner() == "docker exec -i memory python3 /app/memory ingest\n"
+    assert runner() == "docker exec -i memory python3 /app/memory ingest --wait 2\n"
 
 
 def test_container_home_is_the_host_home():
@@ -856,7 +862,7 @@ def test_commit_cursor_after_a_failure_is_the_last_reflected_commit(m, tmp_path,
         with pytest.raises(m.ReflectorFailed):
             m.learn_repo(c, repo)
         cur = m.cursor(c, f"repo:{repo.resolve()}:commits")
-    second = subprocess.run(["git", "-C", str(repo), "rev-parse", "--short", "HEAD~1"], capture_output=True, text=True).stdout.strip()
+    second = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD~1"], capture_output=True, text=True, check=True).stdout.strip()
     assert cur == second and "body paragraph two" in calls[1]
 
 
@@ -919,3 +925,295 @@ def test_a_half_written_last_line_is_left_for_the_next_read(m, tmp_path):
     with open(p, "a") as f:
         f.write('f"}}\n')
     assert m.claude_code_turns(p, whole) == ("ASSISTANT: half", p.stat().st_size)
+
+
+# ------------------------------------------------------------------ the lock under a long learn
+
+
+def test_lock_gives_up_with_lock_busy_and_tolerates_a_vanished_lock(m):
+    """LockBusy is a SystemExit, so the CLI still exits with its message; leaving a lock someone removed is fine."""
+    m.ROOT.mkdir(parents=True, exist_ok=True)
+    m.LOCK.mkdir()
+    with pytest.raises(m.LockBusy, match=r"held for all of 0\.2 s"), m.Lock(wait=0.2):
+        pass
+    assert issubclass(m.LockBusy, SystemExit)
+    m.LOCK.rmdir()
+    with m.Lock():
+        m.LOCK.rmdir()
+    assert not m.LOCK.exists()
+
+
+def test_ingest_wait_bounds_how_long_session_start_can_block(m):
+    """A long `learn` holds the lock; the SessionStart hook's `ingest --wait 2` gives up rather than hold the session."""
+    m.ROOT.mkdir(parents=True, exist_ok=True)
+    m.LOCK.mkdir()
+    m.main.__globals__["sys"].argv = ["memory", "ingest", "--wait", "0.2"]
+    started = time.time()
+    with pytest.raises(m.LockBusy):
+        m.main()
+    assert time.time() - started < 2
+
+
+# ------------------------------------------------------------------ MCP layer, against a stand-in mcp package
+
+
+def fake_mcp(monkeypatch, v2):
+    """One server class standing in for mcp 2.x's MCPServer or 1.x's FastMCP; it records its tools and its run()."""
+    class Server:
+        def __init__(self, *args, **kwargs):
+            self.args, self.kwargs, self.tools, self.runs = args, kwargs, {}, []
+            Server.last = self
+
+        def tool(self):
+            def register(fn):
+                self.tools[fn.__name__] = fn
+                return fn
+            return register
+
+        def run(self, **kwargs):
+            self.runs.append(kwargs)
+
+    mod = types.ModuleType("mcp_stand_in")
+    mod.MCPServer = mod.FastMCP = Server
+    monkeypatch.setitem(sys.modules, "mcp.server.mcpserver", mod if v2 else None)
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", mod)
+    return Server
+
+
+def test_mcp_tools_answer_on_both_mcp_versions_and_transports(m, monkeypatch):
+    """mcp 2.x takes host and port at run(), 1.x at construction; recall, remember and feedback work through either."""
+    for v2, transport in ((True, "http"), (False, "http"), (True, "stdio")):
+        srv_class = fake_mcp(monkeypatch, v2)
+        m.cmd_mcp(types.SimpleNamespace(transport=transport, port=9999))
+        srv = srv_class.last
+        if transport == "stdio":
+            assert srv.runs == [{"transport": "stdio"}]
+        elif v2:
+            assert srv.runs == [{"transport": "streamable-http", "host": "0.0.0.0", "port": 9999}] and srv.kwargs == {}
+        else:
+            assert srv.runs == [{"transport": "streamable-http"}] and srv.kwargs == {"host": "0.0.0.0", "port": 9999}
+    tools = srv.tools
+    assert tools["recall"]("anything") == "no matches"
+    assert tools["remember"]("mcp fact", "p") == "saved to p"
+    hit = tools["recall"]("mcp", "p")
+    assert "[p] mcp fact" in hit
+    assert tools["feedback"](hit.split()[0], False) == "ok"
+    with m.db() as c:
+        assert c.execute("SELECT harmful FROM lessons").fetchone()[0] == 1
+
+
+def test_mcp_tools_answer_busy_while_a_learn_holds_the_lock(m, monkeypatch):
+    """A tool must not stop the server when a long `learn` holds the lock; a remembered lesson waits in the journal."""
+    srv_class = fake_mcp(monkeypatch, True)
+    m.cmd_mcp(types.SimpleNamespace(transport="stdio", port=0))
+    tools = srv_class.last.tools
+    monkeypatch.setattr(m, "LOCK_WAIT", 0.1)
+    m.ROOT.mkdir(parents=True, exist_ok=True)
+    m.LOCK.mkdir()
+    assert "when the running learn ends" in tools["remember"]("kept for later", "p")
+    assert tools["feedback"]("abc", True).startswith("busy")
+    m.LOCK.rmdir()
+    run_ingest(m)
+    assert (m.COMPILED / "projects" / "p.md").read_text() == "- (1) kept for later\n"
+
+
+def test_mcp_needs_the_mcp_package(m, monkeypatch):
+    monkeypatch.setitem(sys.modules, "mcp.server.mcpserver", None)
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", None)
+    with pytest.raises(SystemExit, match="pip install mcp"):
+        m.cmd_mcp(types.SimpleNamespace(transport="stdio", port=0))
+
+
+# ------------------------------------------------------------------ Reflector, embeddings and search edges
+
+
+def test_llm_edges_sdk_without_its_package_json_that_is_not_the_result_and_no_reflector(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setitem(sys.modules, "anthropic", None)
+    m = load(tmp_path / "r", monkeypatch, MEMORY_LLM="sdk")
+    with pytest.raises(SystemExit, match="pip install anthropic"):
+        m.llm("x")
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    (fakebin / "claude").write_text("#!/bin/sh\necho '[1, 2]'\n")
+    (fakebin / "claude").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fakebin}:/usr/bin:/bin")
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    assert m.llm("x").strip() == "[1, 2]"                  # JSON, but not the CLI's result object: it is the answer
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="auto"))
+    assert m.llm("x") is None
+    assert "no Reflector" in capsys.readouterr().err
+
+
+def test_reflect_is_a_no_op_when_the_llm_is_off(m):
+    """MEMORY_LLM=none is keyword-only by choice: no lessons, and not a failure."""
+    assert m.reflect("some text", "p", set()) == []
+
+
+def test_embed_batches_both_providers_and_never_fails_a_run(tmp_path, monkeypatch, capsys):
+    """Voyage and OpenAI in batches of 64; no key, a network error, or a short answer all mean "embed later"."""
+    calls = []
+
+    def answer(req, timeout):
+        body = json.loads(req.data)
+        calls.append((req.full_url, req.headers["Authorization"], body["model"], len(body["input"])))
+        return io.BytesIO(json.dumps({"data": [{"embedding": [1.0, 0.0]} for _ in body["input"]]}).encode())
+
+    m = load(tmp_path, monkeypatch, MEMORY_EMBED="voyage", VOYAGE_API_KEY="pa-test")
+    monkeypatch.setattr(m.urllib.request, "urlopen", answer)
+    assert len(m.embed([f"t{i}" for i in range(70)])) == 70
+    assert [c[3] for c in calls] == [64, 6]
+    assert calls[0][:3] == ("https://api.voyageai.com/v1/embeddings", "Bearer pa-test", "voyage-3.5")
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, embed="openai"))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    assert m.embed(["x"]) != [None]
+    assert calls[-1][:3] == ("https://api.openai.com/v1/embeddings", "Bearer sk-test", "text-embedding-3-small")
+    monkeypatch.delenv("OPENAI_API_KEY")
+    assert m.embed(["x"]) == [None]
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    def offline(req, timeout):
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr(m.urllib.request, "urlopen", offline)
+    assert m.embed(["x", "y"]) == [None, None]
+    monkeypatch.setattr(m.urllib.request, "urlopen", lambda req, timeout: io.BytesIO(b'{"data": []}'))
+    assert m.embed(["x"]) == [None]
+    assert m.embed([]) == []
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, embed="none"))
+    assert m.embed(["x"]) == [None]
+    err = capsys.readouterr().err
+    assert "no embedding API key" in err and "embedding call failed" in err and "returned 0 vectors for 1" in err
+
+
+def test_search_falls_back_to_keywords_when_the_query_cannot_be_embedded(tmp_path, monkeypatch):
+    m = load(tmp_path, monkeypatch, MEMORY_EMBED="voyage")
+    monkeypatch.setattr(m, "embed", lambda texts: [None] * len(texts))
+    journal(m, ["[all] cat"])
+    run_ingest(m)
+    with m.db() as c:
+        assert [r["text"] for r in m.search(c, "cat")] == ["cat"]
+
+
+def test_vector_rank_falls_back_when_the_embeddings_differ_in_size(m):
+    """numpy cannot stack vectors of two sizes; the stdlib path ranks them anyway."""
+    pytest.importorskip("numpy")
+    rows = [{"id": 0, "embedding": m.array("f", [1, 0]).tobytes()}, {"id": 1, "embedding": m.array("f", [1, 0, 0]).tobytes()}]
+    assert [r["id"] for r in m.vector_rank(m.array("f", [1, 0]).tobytes(), rows)] == [0, 1]
+
+
+def test_journal_write_steps_past_taken_names_and_gives_up_after_a_thousand(m, monkeypatch):
+    monkeypatch.setattr(m.time, "time_ns", lambda: 7)
+    d = m.JOURNAL / m.datetime.now().strftime("%Y-%m-%d")
+    d.mkdir(parents=True)
+    pid = os.getpid()
+    (d / f"7-{pid}-t.md").write_text("taken")
+    assert m.journal_write(["[all] a"], "t").name == f"8-{pid}-t.md"
+    for n in range(1000):
+        (d / f"{7 + n}-{pid}-t.md").touch()
+    with pytest.raises(RuntimeError, match="unique filename"):
+        m.journal_write(["[all] b"], "t")
+
+
+def test_transcript_cwd_skips_junk_lines_and_files_without_one(m, tmp_path):
+    a, b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
+    a.write_text('not json\n[1, 2]\n{"type": "summary"}\n')
+    b.write_text('{"type": "user", "cwd": "/home/me/GitHub/p"}\n')
+    assert m.transcript_cwd([a]) is None
+    assert m.transcript_cwd([a, b]) == "/home/me/GitHub/p"
+
+
+# ------------------------------------------------------------------ the scripts themselves
+
+
+def load_tool(name):
+    loader = importlib.machinery.SourceFileLoader(f"tool_{name}", str(REPO / "tools" / f"{name}.py"))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def test_the_scripts_run_as_main(m, tmp_path, monkeypatch, capsys):
+    """bin/memory and eval_recall.py do their job when run directly."""
+    monkeypatch.setattr(sys, "argv", ["memory", "remember", "run as main", "--project", "p"])
+    runpy.run_path(str(BIN), run_name="__main__")
+    assert (m.COMPILED / "projects" / "p.md").read_text() == "- (1) run as main\n"
+    q = tmp_path / "q.jsonl"
+    q.write_text(json.dumps({"query": "main", "project": "p", "expect": ["run as main"]}) + "\n")
+    monkeypatch.setattr(sys, "argv", ["eval_recall.py", str(q)])
+    with pytest.raises(SystemExit) as e:
+        runpy.run_path(str(REPO / "tools" / "eval_recall.py"), run_name="__main__")
+    assert e.value.code == 0 and "recall@8: 1/1" in capsys.readouterr().out
+
+
+def test_check_docs_reports_every_kind_of_drift(tmp_path, monkeypatch, capsys):
+    """Each check failing once: a stale count, a stale coverage gate, a version with no changelog section, a broken
+    link, a home path. External links, anchors, placeholders and images are left alone."""
+    cd = load_tool("check_docs")
+    for name in cd.PROSE:
+        (tmp_path / name).write_text("fine\n")
+    (tmp_path / "README.md").write_text("5 tests. The coverage gate is 80 per cent. [a](missing.md) [b](https://example.com) [c](#top)\n")
+    (tmp_path / "CHANGELOG.md").write_text("## [0.1.0]\n")
+    (tmp_path / "CITATION.cff").write_text('version: "9.9.9"\n')
+    (tmp_path / ".coveragerc").write_text("[report]\nfail_under = 100\n")
+    home = "/" + "Users" + "/someone"
+    (tmp_path / "notes.txt").write_text(f"see {home}/x, not /Users/<you>/y\n")
+    (tmp_path / "pic.png").write_bytes(home.encode())
+    monkeypatch.setattr(cd, "REPO", tmp_path)
+    monkeypatch.setattr(cd, "collected_tests", lambda: 7)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    assert cd.main() == 1
+    out = capsys.readouterr().out
+    assert "::error::README.md: says 5 tests, pytest collects 7" in out
+    assert "README.md: says coverage gate 80, .coveragerc says 100" in out
+    assert "CHANGELOG.md has no section for CITATION.cff version 9.9.9" in out
+    assert "README.md: broken link missing.md" in out and "example.com" not in out
+    assert "notes.txt:1: host-specific home path" in out and "pic.png" not in out
+    assert "5 problem(s)" in out
+
+
+def test_check_docs_stops_when_pytest_cannot_collect(monkeypatch):
+    cd = load_tool("check_docs")
+    monkeypatch.setattr(cd.subprocess, "run", lambda *a, **k: types.SimpleNamespace(stdout="no summary", stderr="boom"))
+    with pytest.raises(SystemExit, match="could not collect tests"):
+        cd.collected_tests()
+
+
+def test_eval_recall_refuses_no_questions_and_finds_memory_beside_itself(m, tmp_path, monkeypatch):
+    """In the image eval_recall.py sits beside `memory` in /app; with neither layout present it says so."""
+    ev = load_tool("eval_recall")
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("\n")
+    with pytest.raises(SystemExit, match="no questions"):
+        ev.main([str(empty)])
+    app = tmp_path / "app"
+    app.mkdir()
+    shutil.copy(BIN, app / "memory")
+    monkeypatch.setattr(ev, "REPO", tmp_path / "nowhere")
+    monkeypatch.setattr(ev, "__file__", str(app / "eval_recall.py"))
+    assert ev.load_memory().__name__ == "memory_cli"
+    monkeypatch.setattr(ev, "__file__", str(tmp_path / "eval_recall.py"))
+    with pytest.raises(SystemExit, match="no bin/memory"):
+        ev.load_memory()
+
+
+def test_init_store_makes_a_private_git_store_and_is_safe_to_rerun(tmp_path):
+    root = tmp_path / "store"
+    env = {**os.environ, "MEMORY_ROOT": str(root), "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    for _ in range(2):
+        out = subprocess.run(["bash", str(REPO / "tools" / "init_store.sh")], env=env, capture_output=True, text=True, check=True).stdout
+    assert out == f"store ready at {root}\n"
+    assert all((root / d).is_dir() for d in ("journal/claude-ai", "compiled/projects", "archive", "exports"))
+    assert (root / ".gitignore").read_text().split() == [".lock/", "memory.db*", "hook.log", "*.tmp", "exports/"]
+    log = subprocess.run(["git", "-C", str(root), "log", "--format=%s"], capture_output=True, text=True, check=True).stdout
+    assert log == "init store\n"
+
+
+def test_bootstrap_dry_run_touches_nothing(tmp_path):
+    env = {**os.environ, "HOME": str(tmp_path)}
+    out = subprocess.run(["bash", str(REPO / "tools" / "bootstrap.sh"), "--dry-run"], env=env, capture_output=True, text=True, check=True).stdout
+    assert out.startswith("would copy") and not any(tmp_path.iterdir())

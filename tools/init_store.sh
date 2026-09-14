@@ -7,7 +7,7 @@ root="${MEMORY_ROOT:-$HOME/memory}"
 mkdir -p "$root/journal/claude-ai" "$root/compiled/projects" "$root/archive" "$root/exports"
 if [ ! -d "$root/.git" ]; then
   git -C "$root" init -q
-  printf '.lock/\nmemory.db*\nhook.log\n*.tmp\n' > "$root/.gitignore"
+  printf '.lock/\nmemory.db*\nhook.log\n*.tmp\nexports/\n' > "$root/.gitignore"   # exports: large, and already on claude.ai
   git -C "$root" add -A && git -C "$root" commit -qm "init store" || true
 fi
 echo "store ready at $root"

@@ -4,21 +4,57 @@
 no memory of this project and no access to any prior session. Everything you need is in this
 repository. Read this file, then `AGENTS.md`, then `CLAUDE.md`.
 
-Last updated 13 September 2026, after the Reflector-failure fix and the end-to-end harness.
+Last updated 13 September 2026, after the review pass to full coverage.
 
 ## State
 
-`v0.1.0` plus the unreleased work in `CHANGELOG.md`, in two pull requests. #1 holds the backfill
-fixes and the native default, with CI green on every job. The second is stacked on #1 and holds
-the Reflector-failure fix and `tools/e2e.sh`. Neither is merged: merging is the Human Author's
-step. The suite has 58 tests at 93 per cent coverage, and `tools/e2e.sh` passes its 41 checks
-on the Mac mini. Nothing has run against a real `~/memory` store, and nothing is installed on the
-Mac mini: no `~/memory`, no hooks in `~/.claude/settings.json`, no MCP registration, no
-container.
+`v0.1.0` plus the unreleased work in `CHANGELOG.md`, in two open pull requests:
+
+- #1: the backfill fixes and the native default.
+- #2, stacked on #1: the Reflector-failure fix, `tools/e2e.sh`, and the review pass (full
+  coverage, the wider lint, the lock under a long `learn`).
+
+Neither is merged. This session's permission settings refuse `gh pr merge`, so merging is the
+Human Author's step. The suite has 76 tests at 100 per cent of lines and branches, and
+`tools/e2e.sh` passes its 41 checks on the Mac mini. Nothing has run against a real `~/memory`
+store, and nothing is installed on the Mac mini: no `~/memory`, no hooks in
+`~/.claude/settings.json`, no MCP registration, no container.
+
+## Next steps, in order
+
+1. Merge #1, then #2; #2 retargets to `main` when #1's branch is deleted. After each, confirm CI
+   on `main` is green, including the `container` job, which pull requests do not run.
+2. Wait for Bitcoin Core's initial block download and Fulcrum's indexing to finish.
+3. Install natively, as the README says: `tools/init_store.sh`; the three hooks from
+   `hooks/settings.snippet.json` in `~/.claude/settings.json`; optionally the `.venv`, then
+   `claude mcp add` and `examples/claude_desktop_config.native.json` for the MCP server.
+4. Add `@~/memory/compiled/projects/<slug>.md` to each project's `CLAUDE.md`.
+5. Backfill. Start with one repository (`learn --repo`) and read `compiled/projects/`, to judge
+   the Reflector prompt before it runs over everything. Then `learn --all`: a usage limit stops
+   it, and running it again resumes. Pass no `--notes` folder the Human Author has not named.
+6. After a month of real journals, settle what is listed under "What is not settled". Cut 0.2.0
+   as `RELEASING.md` describes when the Human Author wants a release.
 
 ## Handoff log
 
 Newest first.
+
+### 13 September 2026 — review pass to full coverage
+
+- Coverage is 100 per cent of lines and branches over `bin/memory`, `tools/check_docs.py` and
+  `tools/eval_recall.py`, with nothing excluded; the gate in `.coveragerc` enforces it. The
+  network clients that used to be excluded now run against stand-ins.
+- The lint ruleset is wider (`ruff.toml`) and clean, and actionlint runs locally as in CI.
+- A long `learn` holds the lock for its whole run. The SessionStart hook now gives up after 2 s
+  instead of 20, and the MCP tools answer "busy" instead of stopping the server.
+- An embedding failure no longer rolls back a run; commit cursors are full hashes; the store's
+  git history no longer takes claude.ai exports.
+- CI runs on pull requests against any base branch, so a stacked pull request gets its checks.
+- Stale prose fixed: the scope note in `.coveragerc`, the size note in `ruff.toml`, the next
+  steps in `tools/bootstrap.sh`, the eval README's Docker path, and the Claude Desktop example,
+  which was Docker-only.
+- Names of the operator's private repositories had reached test fixtures and the changelog;
+  they are now neutral. `AGENTS.md` rule 10 forbids it from here on.
 
 ### 13 September 2026 — Reflector failures and the end-to-end harness
 
@@ -55,8 +91,8 @@ Newest first.
   install with `claude -p`, and use the container only when `.env` holds a key
   (`hooks/runner.sh`; decision 006 amended).
 - CI on `main` had been red since the first push, because its compose check needs `.env`. Fixed.
-- Scope agreed with the Human Author: `~/Documents/Claude` (job-search and résumé material,
-  synced to iCloud) is not ingested.
+- Scope agreed with the Human Author: `~/Documents/Claude`, a personal folder, is not
+  ingested.
 - The Bitcoin Core and Fulcrum rule under "Do not" still stands, although neither was running.
   Nothing was run against the real store.
 
@@ -76,6 +112,7 @@ traceable fake LLM.
   claude.ai. The claude.ai path is Google Drive sync of `compiled/` and `journal/claude-ai/`.
 - Which install runs: native with `claude -p` unless `.env` holds an API key.
 - A failed Reflector call costs nothing already done, and nothing is sent twice after it.
+- Coverage stays at 100 per cent of lines and branches, with nothing excluded.
 
 ## What is not settled
 
@@ -90,17 +127,6 @@ traceable fake LLM.
 - An answer with no JSON array in it counts as "no lessons", not as a failure, so one odd answer
   cannot stall a backfill. If the Reflector prompt drifts, that is where lessons would go
   missing unnoticed.
-
-## Before the first real run
-
-1. Merge #1, then the pull request stacked on it.
-2. Wait for Bitcoin Core's initial block download and Fulcrum's indexing to finish.
-3. Install natively as the README says: `tools/init_store.sh`, the hooks from
-   `hooks/settings.snippet.json`, and optionally the `.venv` for the MCP server.
-4. Add `@~/memory/compiled/projects/<slug>.md` to each project's `CLAUDE.md`.
-5. Backfill. Start with one repository (`learn --repo`) and read `compiled/projects/`, to judge
-   the Reflector prompt before it runs over everything. After that, `learn --all` can run
-   whole: a usage limit stops it, and running it again resumes.
 
 ## Do not
 

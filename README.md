@@ -15,7 +15,8 @@ start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.1.0`. 58 tests, coverage 93 per cent on `bin/memory`, six-process concurrency test green.
+`v0.1.0`. 76 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+uses, six-process concurrency test green.
 The image is built and smoke-tested on the Mac mini (arm64), and `tools/e2e.sh` runs both
 installs end to end against a fake Reflector. Not yet run against a real store; see
 `HANDOFF.md`.
@@ -135,7 +136,8 @@ extension does not read that file.
 
 ### Claude Desktop — `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-Claude Desktop only accepts stdio commands. Native (needs the venv above):
+Claude Desktop only accepts stdio commands; both configs are also in `examples/`. Native (needs the
+venv above):
 
 ```json
 { "mcpServers": { "memory": { "command": "/Users/<you>/GitHub/memory-optimized-context/.venv/bin/python3", "args": ["/Users/<you>/GitHub/memory-optimized-context/bin/memory", "mcp"] } } }
@@ -200,7 +202,7 @@ if you made the venv) or `docker exec memory python3 /app/memory` (Docker).
 memory search "query" [--project slug] [-k 8] [--all]
 memory remember "fact" --project slug
 memory vote <id> --helpful | --harmful
-memory ingest [--transcript PATH --project slug] [--export conversations.json]
+memory ingest [--transcript PATH --project slug] [--export conversations.json] [--wait SECONDS]
 memory learn --all | --repo PATH | --notes DIR | --transcripts | --export FILE
 memory compile
 ```
@@ -223,7 +225,7 @@ memory compile
 
 - No file has two writers. Journals are write-once. `compiled/` and `memory.db` are written only under `.lock`.
 - Readers never see a torn file (`os.replace`).
-- A hook never blocks Claude: it forks and returns.
+- A hook never holds Claude up: the Stop hooks fork and return, and the SessionStart hook waits at most 2 s for the lock, so a long `learn` cannot stall a session.
 - Reflection can't recurse: `MEMORY_REFLECT=1` is set on the inner `claude -p`, and both hooks exit on it.
 - The lock is a `mkdir` on the bind-mounted `~/memory/.lock`, so host processes and container processes serialize against each other.
 - Every compile is a git commit. `git log -p compiled/` is the audit trail.
@@ -236,7 +238,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       58 tests, six-process concurrency test included
+tests/test_memory.py       76 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
@@ -250,7 +252,7 @@ Dockerfile, docker-compose.yml, .env.example
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements-dev.txt
-tools/run_ci_locally.sh            # lint, shellcheck, tests with the coverage gate
+tools/run_ci_locally.sh            # ruff, actionlint, shellcheck, docs, tests at 100 per cent coverage
 tools/run_ci_locally.sh --image    # plus the container build
 tools/e2e.sh                       # both installs end to end against fakes; --no-docker for native only
 ```

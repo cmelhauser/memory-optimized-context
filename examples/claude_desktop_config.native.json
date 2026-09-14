@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "memory": {
+      "command": "/Users/<you>/GitHub/memory-optimized-context/.venv/bin/python3",
+      "args": ["/Users/<you>/GitHub/memory-optimized-context/bin/memory", "mcp"]
+    }
+  }
+}

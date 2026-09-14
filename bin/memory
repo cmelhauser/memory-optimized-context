@@ -12,7 +12,7 @@ Layout ($MEMORY_ROOT, default ~/memory):
 
 Subcommands:
   hook      called by Claude Code hooks (stdin/--input JSON): journal LESSONS, reflect transcript tail, ingest, compile
-  ingest    journal files, --transcript PATH, --export conversations.json
+  ingest    journal files, --transcript PATH, --export conversations.json; --wait S caps the wait for the lock
   learn     everything else, incrementally: --repo (commit messages + docs), --notes, --transcripts
             (backfill ~/.claude/projects), --export; --all does all of them
   compile   write compiled/*.md from active lessons (also prunes)
@@ -24,7 +24,7 @@ Subcommands:
 """
 import argparse, hashlib, json, math, os, re, shutil, sqlite3, subprocess, sys, tempfile, time, urllib.request
 from array import array
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,12 +37,13 @@ CFG = {
     "model": os.environ.get("MEMORY_MODEL", "claude-haiku-4-5-20251001"),
     "embed": os.environ.get("MEMORY_EMBED", "none"),      # none | voyage | openai
     "embed_model": os.environ.get("MEMORY_EMBED_MODEL", ""),
-    "half_life_days": float(os.environ.get("MEMORY_HALF_LIFE", 90)),
-    "max_lines": int(os.environ.get("MEMORY_MAX_LINES", 150)),
-    "min_score": float(os.environ.get("MEMORY_MIN_SCORE", 0.15)),
+    "half_life_days": float(os.environ.get("MEMORY_HALF_LIFE", "90")),
+    "max_lines": int(os.environ.get("MEMORY_MAX_LINES", "150")),
+    "min_score": float(os.environ.get("MEMORY_MIN_SCORE", "0.15")),
     "transcript_chars": 30000,
 }
-NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
+def NOW():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 LESSON_RE = re.compile(r"^\[([a-z0-9][a-z0-9._-]*)\]\s+(.+?)\s*$", re.I)
 
 
@@ -51,22 +52,27 @@ def log(*a):
 
 
 # ---------------------------------------------------------------- lock (single writer)
+LOCK_WAIT = 20   # seconds a writer waits for the lock; the SessionStart hook passes `ingest --wait 2`
+
+class LockBusy(SystemExit):
+    """Another writer held the lock for the whole wait, usually a long `learn`. A SystemExit, so the CLI still exits
+    with the message; the MCP tools catch it and answer "busy" rather than stop the server."""
+
 class Lock:
-    def __init__(self, wait=20):
-        self.wait = wait
+    def __init__(self, wait=None):
+        self.wait = LOCK_WAIT if wait is None else wait
     def __enter__(self):
         ROOT.mkdir(parents=True, exist_ok=True)
-        for _ in range(self.wait * 10):
+        for _ in range(int(self.wait * 10)):
             try:
                 LOCK.mkdir(); return self
             except FileExistsError:
                 if time.time() - LOCK.stat().st_mtime > 600:   # stale lock from a crash
                     LOCK.rmdir(); continue
                 time.sleep(0.1)
-        raise SystemExit("memory: lock held too long")
+        raise LockBusy(f"memory: the lock was held for all of {self.wait:g} s (a long `learn`?); try again when it ends")
     def __exit__(self, *e):
-        try: LOCK.rmdir()
-        except FileNotFoundError: pass
+        with suppress(FileNotFoundError): LOCK.rmdir()
 
 
 # ---------------------------------------------------------------- store
@@ -133,7 +139,7 @@ def llm(prompt, system="You are a precise assistant. Output only what is asked."
         try:
             with tempfile.TemporaryDirectory() as d:  # empty cwd → no CLAUDE.md, no project memory loaded
                 r = subprocess.run(["claude", "-p", "--model", CFG["model"], "--output-format", "json"],
-                                   input=f"{system}\n\n{prompt}", capture_output=True, text=True, env=env, cwd=d, timeout=180)
+                                   input=f"{system}\n\n{prompt}", capture_output=True, text=True, env=env, cwd=d, timeout=180, check=False)
         except subprocess.TimeoutExpired:
             log("claude -p timed out"); return None
         if r.returncode != 0:
@@ -156,6 +162,7 @@ def parse_json(text):
 
 # ---------------------------------------------------------------- embeddings (optional)
 def embed(texts):
+    """Vectors for texts, or None for each when embeddings are off, unkeyed, or the call fails; embed_missing retries."""
     if CFG["embed"] == "none" or not texts: return [None] * len(texts)
     if CFG["embed"] == "voyage":
         url, key, model = "https://api.voyageai.com/v1/embeddings", os.environ.get("VOYAGE_API_KEY"), CFG["embed_model"] or "voyage-3.5"
@@ -163,11 +170,16 @@ def embed(texts):
         url, key, model = "https://api.openai.com/v1/embeddings", os.environ.get("OPENAI_API_KEY"), CFG["embed_model"] or "text-embedding-3-small"
     if not key: log("no embedding API key; skipping"); return [None] * len(texts)
     out = []
-    for i in range(0, len(texts), 64):
-        req = urllib.request.Request(url, data=json.dumps({"input": texts[i:i+64], "model": model}).encode(),
-                                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            out += [array("f", d["embedding"]).tobytes() for d in json.load(r)["data"]]
+    try:
+        for i in range(0, len(texts), 64):
+            req = urllib.request.Request(url, data=json.dumps({"input": texts[i:i+64], "model": model}).encode(),
+                                         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                out += [array("f", d["embedding"]).tobytes() for d in json.load(r)["data"]]
+    except (OSError, ValueError, KeyError, TypeError) as e:   # network, HTTP or an odd body: embed later, never fail the run
+        log("embedding call failed:", str(e)[:300]); return [None] * len(texts)
+    if len(out) != len(texts):
+        log(f"embedding call returned {len(out)} vectors for {len(texts)} texts"); return [None] * len(texts)
     return out
 
 _dot = getattr(math, "sumprod", None) or (lambda x, y: sum(map(float.__mul__, x, y)))   # sumprod is 3.12+, ~10x faster
@@ -401,7 +413,7 @@ def split_tagged(text):
         m = LESSON_RE.match(line.strip().lstrip("-* ").strip())
         if m: tagged.append((m.group(1), m.group(2)))
         else: rest.append(line)
-    return tagged, ("\n".join(rest).strip() if any(l.strip() for l in rest) else "")
+    return tagged, ("\n".join(rest).strip() if any(line.strip() for line in rest) else "")
 
 def sha(text): return hashlib.sha1(text.encode(errors="ignore")).hexdigest()[:12]
 
@@ -427,20 +439,20 @@ def reflect_batches(c, chunks, project, label, done=lambda name: None):
             for n, _ in buf: done(n)
             buf, size = [], 0
     with carrying(new):
-        for name, text in chunks:
-            text = text[:DOC_MAX_CHARS]; piece = len(f"### {name}\n{text}") + 2   # + the "\n\n" that joins it
+        for name, whole in chunks:
+            text = whole[:DOC_MAX_CHARS]; piece = len(f"### {name}\n{text}") + 2   # + the "\n\n" that joins it
             if size + piece > budget: flush()
             buf.append((name, text)); size += piece
         flush()
     return new
 
 def git(repo, *args):
-    r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=False)
     return r.stdout if r.returncode == 0 else ""
 
 def git_ok(repo, *args):
     """For commands whose success is silent (cat-file -e): the exit status, not stdout."""
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True).returncode == 0
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=False).returncode == 0
 
 def repo_slug(path):
     top = git(path, "rev-parse", "--show-toplevel").strip() or str(path)
@@ -469,7 +481,7 @@ def learn_repo(c, path, since=None):
         if head:
             key = f"repo:{path}:commits"; last = cursor(c, key)
             rng = f"{last}..HEAD" if last and git_ok(path, "cat-file", "-e", last) else "HEAD"   # a rewritten history falls back to full
-            args = ["log", rng, "--no-merges", "--format=%x1e%h %ad %s%n%b", "--date=short", "--reverse"]  # \x1e opens each commit
+            args = ["log", rng, "--no-merges", "--format=%x1e%H %ad %s%n%b", "--date=short", "--reverse"]  # \x1e opens each commit; %H never goes ambiguous
             if since and not last: args.append(f"--since={since}")
             commits = [e.strip() for e in git(path, *args).split("\x1e") if e.strip()]   # a body's blank lines stay in its commit
             if commits and head != last:   # one chunk per commit, so a long history is windowed, not truncated
@@ -501,14 +513,17 @@ def project_of(cwd):
     m = re.search(r"([^/]+)/\.claude/worktrees/", str(cwd))
     return (m.group(1) if m else Path(cwd).name).lower() or "all"
 
+def line_cwd(raw):
+    """The `cwd` on one transcript line; None for a line without one, or one that is not a JSON object."""
+    try: return json.loads(raw).get("cwd")
+    except (ValueError, AttributeError): return None
+
 def transcript_cwd(files):
     """The first `cwd` recorded in any of these transcripts; Claude Code stamps it on every turn."""
     for f in files:
         with open(f, "rb") as fh:
-            for raw in fh:
-                try: cwd = json.loads(raw).get("cwd")
-                except (ValueError, AttributeError): continue
-                if cwd: return cwd
+            cwd = next((c for c in map(line_cwd, fh) if c), None)
+        if cwd: return cwd
     return None
 
 def claude_code_project_dirs(root=None):
@@ -561,15 +576,15 @@ def compile_(c):
     now = time.time(); rows.sort(key=lambda r: -score(r, now))
     by = {}
     for r in rows: by.setdefault(r["project"], []).append(r)
-    fmt = lambda r: f"- ({r['votes']}) {r['text']}"
+    def fmt(r): return f"- ({r['votes']}) {r['text']}"
     atomic_write(COMPILED / "PLAYBOOK.md", "\n".join(fmt(r) for r in by.get("all", [])[:CFG["max_lines"]]) + "\n")
     for proj, rs in by.items():
         if proj != "all": atomic_write(COMPILED / "projects" / f"{proj}.md", "\n".join(fmt(r) for r in rs[:CFG["max_lines"]]) + "\n")
     for p in (COMPILED / "projects").glob("*.md"):   # remove compiled files for projects with no active lessons
         if p.stem not in by: p.unlink()
     if shutil.which("git") and (ROOT / ".git").exists():
-        subprocess.run(["git", "-C", str(ROOT), "add", "-A"], capture_output=True)
-        subprocess.run(["git", "-C", str(ROOT), "commit", "-qm", f"compile {NOW()}"], capture_output=True)
+        subprocess.run(["git", "-C", str(ROOT), "add", "-A"], capture_output=True, check=False)
+        subprocess.run(["git", "-C", str(ROOT), "commit", "-qm", f"compile {NOW()}"], capture_output=True, check=False)
     return len(rows), n_pruned
 
 def post_ingest(c, new):
@@ -581,9 +596,9 @@ def post_ingest(c, new):
 # ---------------------------------------------------------------- commands
 def cmd_hook(a):
     if os.environ.get("MEMORY_REFLECT"): return          # we are inside our own `claude -p`; do nothing
-    j = json.load(open(a.input)) if a.input else json.load(sys.stdin)
+    j = json.loads(Path(a.input).read_text()) if a.input else json.load(sys.stdin)
     msg = j.get("last_assistant_message", "") or ""
-    lines = [l.strip() for l in msg.split("LESSONS:", 1)[1].splitlines() if LESSON_RE.match(l.strip())] if "LESSONS:" in msg else []
+    lines = [ln.strip() for ln in msg.split("LESSONS:", 1)[1].splitlines() if LESSON_RE.match(ln.strip())] if "LESSONS:" in msg else []
     journal_write(lines, a.role)
     project = a.project or project_of(j.get("cwd") or os.getcwd())
     with Lock(), db() as c:
@@ -599,7 +614,7 @@ def cmd_hook(a):
 STOPPED = "memory: {} stopped early: {}. What was read is kept and compiled; run it again to resume."
 
 def cmd_ingest(a):
-    with Lock(), db() as c:
+    with Lock(a.wait), db() as c:
         new = ingest_journal(c)
         with stopping(new) as failed:
             if a.transcript: new += ingest_transcript(c, a.transcript, a.project or "all")
@@ -667,16 +682,22 @@ def cmd_mcp(a):
     def remember(text: str, project: str = "all") -> str:
         """Save one durable lesson. project = slug or 'all'."""
         journal_write([f"[{project}] {text}"], "mcp")
-        with Lock(), db() as c:
-            new = ingest_journal(c); post_ingest(c, new); c.commit(); compile_(c); c.commit()
+        try:
+            with Lock(), db() as c:
+                new = ingest_journal(c); post_ingest(c, new); c.commit(); compile_(c); c.commit()
+        except LockBusy:                          # the journal file is written; the next compile picks it up
+            return f"saved to {project}; it reaches compiled/ when the running learn ends"
         return f"saved to {project}"
 
     @srv.tool()
     def feedback(lesson_id: str, helpful: bool = True) -> str:
         """Mark a recalled lesson as helpful or harmful (harmful x2 archives it)."""
         col = "helpful" if helpful else "harmful"
-        with Lock(), db() as c:
-            c.execute(f"UPDATE lessons SET {col}={col}+1 WHERE id=?", (lesson_id,)); c.commit(); compile_(c); c.commit()
+        try:
+            with Lock(), db() as c:
+                c.execute(f"UPDATE lessons SET {col}={col}+1 WHERE id=?", (lesson_id,)); c.commit(); compile_(c); c.commit()
+        except LockBusy:
+            return "busy: a learn run holds the store; send the feedback again when it ends"
         return "ok"
 
     if a.transport == "http":
@@ -688,7 +709,9 @@ def cmd_mcp(a):
 def main():
     ap = argparse.ArgumentParser(prog="memory"); sp = ap.add_subparsers(dest="cmd", required=True)
     s = sp.add_parser("hook"); s.add_argument("--role", default="main"); s.add_argument("--input"); s.add_argument("--project"); s.set_defaults(f=cmd_hook)
-    s = sp.add_parser("ingest"); s.add_argument("--transcript"); s.add_argument("--project"); s.add_argument("--export"); s.set_defaults(f=cmd_ingest)
+    s = sp.add_parser("ingest"); s.add_argument("--transcript"); s.add_argument("--project"); s.add_argument("--export")
+    s.add_argument("--wait", type=float, default=LOCK_WAIT, help="seconds to wait for the lock (the SessionStart hook passes 2)")
+    s.set_defaults(f=cmd_ingest)
     s = sp.add_parser("learn", help="read repos, notes, transcripts and exports; only what changed since last time")
     s.add_argument("--all", action="store_true", help="transcripts + every git repo under --repos + --notes + exports/")
     s.add_argument("--repos", help="folder of git repos for --all (default ~/GitHub)")
@@ -701,10 +724,13 @@ def main():
     s.add_argument("--exports", help="folder of exports for --all (default $MEMORY_ROOT/exports)")
     s.set_defaults(f=cmd_learn)
     s = sp.add_parser("compile"); s.set_defaults(f=cmd_compile)
-    s = sp.add_parser("search"); s.add_argument("query"); s.add_argument("--project"); s.add_argument("-k", type=int, default=8); s.add_argument("--all", action="store_true"); s.set_defaults(f=cmd_search)
+    s = sp.add_parser("search"); s.add_argument("query"); s.add_argument("--project"); s.add_argument("-k", type=int, default=8)
+    s.add_argument("--all", action="store_true"); s.set_defaults(f=cmd_search)
     s = sp.add_parser("remember"); s.add_argument("text"); s.add_argument("--project", default="all"); s.set_defaults(f=cmd_remember)
-    s = sp.add_parser("vote"); s.add_argument("id"); g = s.add_mutually_exclusive_group(required=True); g.add_argument("--helpful", action="store_true"); g.add_argument("--harmful", action="store_true"); s.set_defaults(f=cmd_vote)
-    s = sp.add_parser("mcp"); s.add_argument("--transport", choices=["stdio", "http"], default="stdio"); s.add_argument("--port", type=int, default=8765); s.set_defaults(f=cmd_mcp)
+    s = sp.add_parser("vote"); s.add_argument("id"); g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--helpful", action="store_true"); g.add_argument("--harmful", action="store_true"); s.set_defaults(f=cmd_vote)
+    s = sp.add_parser("mcp"); s.add_argument("--transport", choices=["stdio", "http"], default="stdio")
+    s.add_argument("--port", type=int, default=8765); s.set_defaults(f=cmd_mcp)
     a = ap.parse_args(); a.f(a)
 
 if __name__ == "__main__":

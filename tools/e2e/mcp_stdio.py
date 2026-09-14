@@ -31,8 +31,8 @@ send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
 names = {t["name"] for t in recv()["result"]["tools"]}
 send({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-      "params": {"name": "recall", "arguments": {"query": "lesson hail", "project": "us-hail-cat-model"}}})
+      "params": {"name": "recall", "arguments": {"query": "lesson flood", "project": "flood-risk-model"}}})
 out = recv()["result"]["content"][0]["text"]
 p.kill()
 print(f"     tools={sorted(names)} recall -> {out.splitlines()[0][:90]}")
-sys.exit(0 if {"recall", "remember", "feedback"} <= names and "us-hail-cat-model" in out else 1)
+sys.exit(0 if {"recall", "remember", "feedback"} <= names and "flood-risk-model" in out else 1)
