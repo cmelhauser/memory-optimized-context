@@ -1,9 +1,13 @@
 # Runs the memory CLI, the Reflector and the MCP server in one container. The hooks stay on the
 # host because Claude Code runs there; they `docker exec` into this container and return.
 #
-# ${HOME} is interpolated by Compose from the shell that runs `docker compose up`. Both bind
-# mounts use identical paths inside and outside the container, so a transcript_path taken from
-# Claude Code's hook JSON resolves without translation.
+# ${HOME} is interpolated by Compose from the shell that runs `docker compose up`. Every bind
+# mount uses identical paths inside and outside the container, so a transcript_path taken from
+# Claude Code's hook JSON resolves without translation. HOME is set to the same path, so that
+# Path.home() inside finds ~/.claude/projects and ~/GitHub where they are mounted.
+#
+# .env is required on purpose. It holds the API key, and without a key the hooks run bin/memory
+# natively through `claude -p` instead (hooks/runner.sh); a container with no key has no Reflector.
 services:
   memory:
     build: .
@@ -14,6 +18,7 @@ services:
     env_file: .env                         # ANTHROPIC_API_KEY, optional VOYAGE_API_KEY / MEMORY_EMBED
     environment:
       - UID=502
+      - HOME=${HOME}                       # not /root: `learn --all` looks under Path.home()
       - MEMORY_ROOT=${HOME}/memory
     volumes:
       - ${HOME}/memory:${HOME}/memory

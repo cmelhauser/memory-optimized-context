@@ -287,11 +287,27 @@ def claude_code_turns(path, start=0):
         end = f.tell()
     return "\n\n".join(out), end
 
-def ingest_transcript(c, path, project):
+def windows(text, size):
+    """Split text into pieces of at most `size` chars, at paragraph breaks where possible. Nothing is dropped."""
+    out, buf = [], ""
+    for para in text.split("\n\n"):
+        while len(para) > size:                    # one paragraph longer than a window: cut it
+            if buf: out.append(buf); buf = ""
+            out.append(para[:size]); para = para[size:]
+        if buf and len(buf) + 2 + len(para) > size:
+            out.append(buf); buf = para
+        else:
+            buf = f"{buf}\n\n{para}" if buf else para
+    return out + ([buf] if buf.strip() else [])
+
+def ingest_transcript(c, path, project, backfill=False):
+    """Reflect a transcript from its cursor. A Stop hook sends the tail (a stop follows every turn);
+    a backfill sends every window, so a long history is read whole rather than its last 30k chars."""
     key = f"transcript:{path}"
     row = c.execute("SELECT cursor FROM sources WHERE key=?", (key,)).fetchone()
     text, end = claude_code_turns(path, int(row["cursor"]) if row and row["cursor"] else 0)
-    new = [upsert(c, p, t) for p, t in reflect(text, project, known_projects(c))]
+    parts = windows(text, CFG["transcript_chars"]) if backfill else [text]
+    new = [upsert(c, p, t) for part in parts for p, t in reflect(part, project, known_projects(c))]
     c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, str(end), NOW()))
     return new
 
@@ -338,8 +354,11 @@ def set_cursor(c, key, value):
     c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, value, NOW()))
 
 def reflect_batches(c, chunks, project, label):
-    """Reflect a list of (name, text) in ~30k-char windows. Returns upsert results."""
+    """Reflect a list of (name, text) in ~30k-char windows. Returns upsert results.
+    The budget counts each `### name` header and the label, not just the text, so reflect()'s
+    30k tail cut never removes the head of a window."""
     new, buf, size = [], [], 0
+    budget = CFG["transcript_chars"] - len(f"[{label}]\n")
     def flush():
         nonlocal buf, size
         if buf:
@@ -347,9 +366,9 @@ def reflect_batches(c, chunks, project, label):
             new.extend(upsert(c, p, t) for p, t in reflect(f"[{label}]\n{text}", project, known_projects(c)))
             buf, size = [], 0
     for name, text in chunks:
-        text = text[:DOC_MAX_CHARS]
-        if size + len(text) > CFG["transcript_chars"]: flush()
-        buf.append((name, text)); size += len(text)
+        text = text[:DOC_MAX_CHARS]; piece = len(f"### {name}\n{text}") + 2   # + the "\n\n" that joins it
+        if size + piece > budget: flush()
+        buf.append((name, text)); size += piece
     flush()
     return new
 
@@ -407,17 +426,36 @@ def learn_notes(c, folder, project=None):
     if prose: new += reflect_batches(c, prose, project, f"notes in {folder.name}")
     return new
 
+def project_of(cwd):
+    """Project slug for a working directory, shared by the Stop hook and the backfill: the folder name,
+    lowercased. A Claude Code worktree (<repo>/.claude/worktrees/<name>) belongs to <repo>, whose
+    CLAUDE.md is the one that imports compiled/projects/<slug>.md."""
+    m = re.search(r"([^/]+)/\.claude/worktrees/", str(cwd))
+    return (m.group(1) if m else Path(cwd).name).lower() or "all"
+
+def transcript_cwd(files):
+    """The first `cwd` recorded in any of these transcripts; Claude Code stamps it on every turn."""
+    for f in files:
+        with open(f, "rb") as fh:
+            for raw in fh:
+                try: cwd = json.loads(raw).get("cwd")
+                except (ValueError, AttributeError): continue
+                if cwd: return cwd
+    return None
+
 def claude_code_project_dirs(root=None):
-    """~/.claude/projects/<encoded-cwd>/ → (project slug, [transcript paths]). The dir name is the cwd with '/' → '-'."""
+    """~/.claude/projects/<encoded-cwd>/ → (project slug, [transcript paths]). The encoding turns '/' and '.' into '-',
+    which cannot be undone for a hyphenated repo name, so the slug comes from the cwd recorded inside the transcripts.
+    A folder without one has no turns to reflect; its last '-' segment stands in."""
     root = Path(root or Path.home() / ".claude" / "projects")
     for d in sorted(root.glob("*/")):
-        slug = d.name.rstrip("-").rsplit("-", 1)[-1].lower() or "all"
-        yield slug, sorted(d.glob("*.jsonl"))
+        files = sorted(d.glob("*.jsonl")); cwd = transcript_cwd(files)
+        yield (project_of(cwd) if cwd else d.name.rstrip("-").rsplit("-", 1)[-1].lower() or "all"), files
 
 def learn_transcripts(c, root=None):
     new = []
     for slug, files in claude_code_project_dirs(root):
-        for f in files: new += ingest_transcript(c, f, slug)
+        for f in files: new += ingest_transcript(c, f, slug, backfill=True)
     return new
 
 def learn_all(c, repos_root=None, notes=None, exports=None):
@@ -476,7 +514,7 @@ def cmd_hook(a):
     msg = j.get("last_assistant_message", "") or ""
     lines = [l.strip() for l in msg.split("LESSONS:", 1)[1].splitlines() if LESSON_RE.match(l.strip())] if "LESSONS:" in msg else []
     journal_write(lines, a.role)
-    project = a.project or Path(j.get("cwd") or os.getcwd()).name.lower()
+    project = a.project or project_of(j.get("cwd") or os.getcwd())
     with Lock(), db() as c:
         new = ingest_journal(c)
         tp = j.get("transcript_path")

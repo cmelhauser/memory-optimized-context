@@ -10,11 +10,13 @@ import importlib.util
 import json
 import os
 import pathlib
+import shutil
 import sqlite3
 import subprocess
 import sys
 import threading
 import time
+import types
 
 import pytest
 
@@ -310,11 +312,12 @@ def test_reconcile_ignores_ids_not_among_candidates(m, monkeypatch):
 # ------------------------------------------------------------------ adapters
 
 
-def transcript(path, turns):
+def transcript(path, turns, cwd=None):
     with open(path, "w") as f:
         for role, text in turns:
             content = text if role == "user" else [{"type": "text", "text": text}]
-            f.write(json.dumps({"type": role, "message": {"role": role, "content": content}}) + "\n")
+            entry = {"type": role, "message": {"role": role, "content": content}}
+            f.write(json.dumps({**entry, "cwd": cwd} if cwd else entry) + "\n")
         f.write("not json\n")
         f.write(json.dumps({"type": "system", "message": {"content": "ignored"}}) + "\n")
 
@@ -614,19 +617,139 @@ def test_learn_notes_ingests_tagged_lines_and_reflects_prose(m, tmp_path, monkey
 
 
 def test_learn_transcripts_backfills_claude_code_dirs(m, tmp_path, monkeypatch):
+    """The slug comes from the cwd recorded in the transcript. The folder name cannot be decoded:
+    three hyphenated repositories ending in -model once all became `model`."""
     root = tmp_path / "projects"
-    d = root / "-Users-me-GitHub-alpha"
-    d.mkdir(parents=True)
-    transcript(d / "s1.jsonl", [("user", "x"), ("assistant", "y")])
-    transcript(d / "s2.jsonl", [("user", "p"), ("assistant", "q")])
-    (root / "-Users-me-other-").mkdir()
+    sessions = {"-home-me-GitHub-flood-risk-model": "/home/me/GitHub/flood-risk-model",
+                "-home-me-GitHub-wind-risk-model": "/home/me/GitHub/wind-risk-model",
+                "-home-me-GitHub-doc-ingestion--claude-worktrees-fervent-fermat-15cf91":
+                    "/home/me/GitHub/doc-ingestion/.claude/worktrees/fervent-fermat-15cf91"}
+    for enc, cwd in sessions.items():
+        (root / enc).mkdir(parents=True)
+        transcript(root / enc / "s1.jsonl", [("user", "x"), ("assistant", "y")], cwd=cwd)
+    transcript(root / "-home-me-GitHub-flood-risk-model" / "s2.jsonl", [("user", "p"), ("assistant", "q")],
+               cwd="/home/me/GitHub/flood-risk-model")
+    (root / "-home-me-other-").mkdir()          # no transcript, so no recorded cwd: the folder name stands in
     monkeypatch.setattr(m, "llm", tracing_llm([]))
-    assert [s for s, _ in m.claude_code_project_dirs(root)] == ["alpha", "other"]
+    assert [s for s, _ in m.claude_code_project_dirs(root)] == \
+        ["doc-ingestion", "flood-risk-model", "wind-risk-model", "other"]
     with m.db() as c:
-        new = m.learn_transcripts(c, root)
-        assert sum(1 for _, n in new if n) == 1           # both sessions yield the same traced lesson
-        assert c.execute("SELECT votes FROM lessons").fetchone()[0] == 2
-        assert c.execute("SELECT count(*) FROM sources WHERE key LIKE 'transcript:%'").fetchone()[0] == 2
+        m.learn_transcripts(c, root)
+        assert {r[0]: r[1] for r in c.execute("SELECT project, votes FROM lessons")} == \
+            {"flood-risk-model": 2, "wind-risk-model": 1, "doc-ingestion": 1}
+        assert c.execute("SELECT count(*) FROM sources WHERE key LIKE 'transcript:%'").fetchone()[0] == 4
+
+
+def test_hook_files_a_worktree_session_under_its_repository(m, tmp_path, monkeypatch):
+    """The Stop hook and the backfill share project_of(), so both name a session the same way."""
+    t = tmp_path / "t.jsonl"
+    transcript(t, [("user", "x"), ("assistant", "y")])
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    monkeypatch.setattr(m, "llm", fake_llm([{"project": "", "text": "reflected"}], {}))
+    p = tmp_path / "hook.json"
+    p.write_text(json.dumps({"cwd": "/home/me/GitHub/Doc-Ingestion/.claude/worktrees/fervent-fermat-15cf91",
+                             "transcript_path": str(t), "last_assistant_message": ""}))
+    m.main.__globals__["sys"].argv = ["memory", "hook", "--input", str(p)]
+    m.main()
+    assert (m.COMPILED / "projects" / "doc-ingestion.md").read_text() == "- (1) reflected\n"
+    assert m.project_of("/home/me/GitHub/flood-risk-model") == "flood-risk-model"
+    assert m.project_of("/home/me/GitHub/doc-ingestion/.claude/worktrees/x/src") == "doc-ingestion"
+
+
+def test_backfill_reflects_every_window_but_the_hook_only_the_tail(m, tmp_path, monkeypatch):
+    """learn --transcripts reads a long session whole, in windows; the Stop hook keeps its one-call tail."""
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, transcript_chars=200))
+    turns = [("user" if i % 2 == 0 else "assistant", f"marker{i:03d} " + "x" * 40) for i in range(40)]
+    turns.append(("user", "y" * 450))                   # one turn longer than a window: cut, not dropped
+    d = tmp_path / "projects" / "-home-me-GitHub-p"
+    d.mkdir(parents=True)
+    transcript(d / "s.jsonl", turns, cwd="/home/me/GitHub/p")
+    shutil.copy(d / "s.jsonl", tmp_path / "tail.jsonl")
+    calls = []
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    with m.db() as c:
+        m.learn_transcripts(c, tmp_path / "projects")
+        sent = "".join(p.split("<conversation>\n", 1)[1] for p in calls)
+        assert all(f"marker{i:03d}" in sent for i in range(40)) and sent.count("y") == 450
+        assert len(calls) >= 12
+        calls.clear()
+        m.ingest_transcript(c, tmp_path / "tail.jsonl", "p")
+    assert len(calls) == 1 and "marker000" not in calls[0]
+
+
+def test_reflect_batches_never_cut_the_head_of_a_window(m, monkeypatch):
+    """Headers and the label count against the window, so the Reflector's tail cut drops nothing."""
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, transcript_chars=300))
+    calls = []
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    with m.db() as c:
+        m.reflect_batches(c, [(f"commit c{i:03d}", f"fix {i}") for i in range(100)], "p", "git history of p")
+    sent = "".join(calls)
+    assert all(f"### commit c{i:03d}\nfix {i}\n" in sent for i in range(100))
+
+
+def test_llm_uses_the_sdk_when_an_api_key_is_present(tmp_path, monkeypatch):
+    """With a key, the Docker image and a native install with `anthropic` both reflect through the SDK."""
+    sent = {}
+
+    class Messages:
+        def create(self, **kw):
+            sent.update(kw)
+            return types.SimpleNamespace(content=[types.SimpleNamespace(type="text", text="[]"),
+                                                  types.SimpleNamespace(type="thinking")])
+
+    fake = types.ModuleType("anthropic")
+    fake.Anthropic = lambda: types.SimpleNamespace(messages=Messages())
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    m = load(tmp_path / "r", monkeypatch, MEMORY_LLM="auto")
+    assert m.llm("hello", "sys", 10) == "[]"
+    assert (sent["model"], sent["system"], sent["max_tokens"]) == (m.CFG["model"], "sys", 10)
+    assert sent["messages"] == [{"role": "user", "content": "hello"}]
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    (fakebin / "claude").write_text("#!/bin/sh\necho cli\n")
+    (fakebin / "claude").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fakebin}:{os.environ['PATH']}")
+    monkeypatch.setitem(sys.modules, "anthropic", None)  # a key but no package: native without `anthropic`
+    assert m.llm("x").strip() == "cli"
+
+
+def test_hook_runner_is_native_without_an_api_key_and_docker_with_one(tmp_path):
+    """No key in the checkout's .env: bin/memory natively, through `claude -p`. A real key: the container."""
+    repo = tmp_path / "repo"
+    (repo / "hooks").mkdir(parents=True)
+    for f in ("compile.sh", "runner.sh"):
+        shutil.copy(REPO / "hooks" / f, repo / "hooks" / f)
+    log = tmp_path / "calls.log"
+    (repo / ".venv" / "bin").mkdir(parents=True)
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    for exe in (repo / ".venv" / "bin" / "python3", fakebin / "docker"):
+        exe.write_text(f'#!/bin/sh\necho "$(basename "$0") $*" >> {log}\n')
+        exe.chmod(0o755)
+    (tmp_path / "home" / "memory").mkdir(parents=True)
+    env = {k: v for k, v in os.environ.items() if k not in ("MEMORY_RUNNER", "MEMORY_REFLECT")}
+    env.update(HOME=str(tmp_path / "home"), PATH=f"{fakebin}:{os.environ['PATH']}")
+
+    def runner():
+        log.write_text("")
+        subprocess.run(["bash", str(repo / "hooks" / "compile.sh")], env=env, check=True, timeout=5)
+        return log.read_text()
+
+    assert runner() == f"python3 {repo}/bin/memory ingest\n"
+    (repo / ".env").write_text("ANTHROPIC_API_KEY=sk-ant-...\n")   # the .env.example placeholder is not a key
+    assert runner() == f"python3 {repo}/bin/memory ingest\n"
+    (repo / ".env").write_text("MEMORY_EMBED=none\nANTHROPIC_API_KEY=sk-ant-api03-abc\n")
+    assert runner() == "docker exec -i memory python3 /app/memory ingest\n"
+
+
+def test_container_home_is_the_host_home():
+    """`learn --all` looks under Path.home(); in the container that must be the mounted host path,
+    and git's identity must not live in a HOME that is no longer /root."""
+    assert "- HOME=${HOME}" in (REPO / "docker-compose.yml").read_text()
+    dockerfile = (REPO / "Dockerfile").read_text()
+    assert "git config --global" not in dockerfile and "git config --system user.email" in dockerfile
 
 
 def test_learn_all_and_cli(m, tmp_path, monkeypatch, capsys):

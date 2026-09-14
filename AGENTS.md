@@ -6,12 +6,13 @@ two overlap.
 
 ## What this project is
 
-A single-file personal memory system for Claude. `bin/memory` (about 420 lines, standard
+A single-file personal memory system for Claude. `bin/memory` (about 450 lines, standard
 library only) owns a SQLite store, an append-only journal, a locked compiler, a Reflector that
 calls Claude to extract lessons from transcripts, a contradiction check, a pruner, hybrid
-search, and an MCP server. Two shell hooks connect it to Claude Code. A Dockerfile and Compose
-file run it in a container. Forty-six tests cover it at 89 per cent, including a six-process
-concurrency test.
+search, and an MCP server. Two shell hooks, sharing `hooks/runner.sh`, connect it to Claude
+Code. It runs natively by default, reflecting through `claude -p`; a Dockerfile and Compose file
+run it in a container when an API key is configured. Fifty-two tests cover it at
+93 per cent, including a six-process concurrency test.
 
 The Human Author is the repository owner; the AI Collaborator is theonlymuffinbot, using
 Anthropic Claude. See `ATTRIBUTION.md` and `LICENSE`.
@@ -41,7 +42,7 @@ Anthropic Claude. See `ATTRIBUTION.md` and `LICENSE`.
 | Path | What |
 |---|---|
 | `bin/memory` | the tool |
-| `hooks/` | Claude Code hook scripts and the `settings.json` snippet |
+| `hooks/` | Claude Code hook scripts, the runner they share, and the `settings.json` snippet |
 | `tests/test_memory.py` | the suite |
 | `tools/run_ci_locally.sh` | what CI runs, runnable locally |
 | `tools/check_docs.py` | prose counts, version, links and paths re-derived from the tree |
