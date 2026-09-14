@@ -15,5 +15,5 @@ top k contains every substring. Start from `questions.example.jsonl` and grow it
 
 ```bash
 tools/eval_recall.py eval/questions.jsonl            # native
-docker exec memory python3 /app/eval_recall.py "$HOME/memory/eval/questions.jsonl"   # Docker
+docker exec memory python3 /app/eval_recall.py "$HOME/GitHub/memory-optimized-context/eval/questions.jsonl"   # Docker; ~/GitHub is mounted
 ```

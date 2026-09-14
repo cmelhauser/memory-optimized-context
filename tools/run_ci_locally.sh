@@ -8,6 +8,7 @@ cd "$(dirname "$0")/.."
 
 echo "== lint"
 ruff check .
+actionlint .github/workflows/*.yml
 shellcheck hooks/*.sh tools/*.sh
 # Compose refuses to start without .env, on purpose (see hooks/runner.sh). Validate a copy against
 # .env.example rather than touch the operator's own .env.

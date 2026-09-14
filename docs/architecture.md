@@ -33,7 +33,9 @@ way.
 2. **Reflect.** Claude Haiku reads the transcript since the last byte offset and returns a JSON
    array of `{project, text}` lessons. The offset is stored so the next stop reflects only what
    is new. The same Reflector runs over claude.ai `conversations.json` exports, keyed by
-   conversation `updated_at`.
+   conversation `updated_at`. When no answer comes (an API or CLI error, a usage limit), no
+   cursor moves past the text that went unanswered: `learn` stops, keeps and compiles what it
+   did, and the next run resumes there.
 3. **Ingest.** Each lesson is upserted by `sha1(project | normalised text)[:10]`. An exact
    duplicate is a vote. Nothing is ever overwritten.
 4. **Reconcile.** A new lesson is compared with its six nearest neighbours in the same project.
@@ -76,7 +78,9 @@ Embeddings are off by default. The corpus is dense with exact tokens (`maxconn`,
 - **Journal:** one file per event, `open(path, "x")`, nanosecond stamp plus PID. Two events in
   one process in one tick still get two files; the test suite proves it.
 - **Lock:** `mkdir .lock` on the bind-mounted store, so host and container processes serialise
-  against the same directory. Waits up to 20 s. Breaks a lock older than 10 minutes.
+  against the same directory. Waits up to 20 s (2 s for the SessionStart hook's
+  `ingest --wait 2`), then gives up with `LockBusy`; the MCP tools answer "busy" instead of
+  stopping. Breaks a lock older than 10 minutes.
 - **Outputs:** `.tmp` sibling then `os.replace`. A reader never sees a torn file.
 - **SQLite:** WAL, 30 s busy timeout, and on a named Docker volume rather than a macOS bind mount.
 - **Recursion:** the Reflector's own `claude -p` runs with `MEMORY_REFLECT=1`; both hooks exit

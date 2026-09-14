@@ -1,22 +1,18 @@
 # Coverage configuration.
 #
-# SCOPE. The gate covers `bin/memory`, the whole tool. Three regions are excluded by pattern
-# because they are network clients that a unit test cannot exercise without a key: the
-# Anthropic SDK and `claude -p` branches of `llm()`, the embedding HTTP calls, and the MCP
-# server's transport startup. Everything that touches the store, the lock, the journal, the
-# compiler, the adapters and the reconciliation logic is inside the gate.
+# SCOPE. The gate is 100 per cent of lines and branches over the tool, `bin/memory`, and the two
+# tools CI relies on, `tools/check_docs.py` and `tools/eval_recall.py`. Nothing is excluded: the
+# network clients (the Anthropic SDK, `claude -p`, the embedding calls, the MCP transports) are
+# exercised against stand-ins, and each script's `__main__` block is run with runpy. Test code,
+# the fakes under `tools/e2e/` included, is not measured.
 [run]
-branch = False
+branch = True
 include =
     bin/memory
+    tools/check_docs.py
+    tools/eval_recall.py
 
 [report]
 show_missing = True
 skip_covered = False
-fail_under = 80
-exclude_also =
-    if __name__ == .__main__.:
-    # Network clients; see SCOPE above.
-    import anthropic
-    urllib.request.urlopen
-    srv.run\(
+fail_under = 100

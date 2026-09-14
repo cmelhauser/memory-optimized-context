@@ -13,3 +13,7 @@ ruff>=0.6
 shellcheck-py>=0.10
 # Optional at runtime, required by the MCP server test.
 mcp>=1.13
+# Optional at runtime (the image pins it); here so the suite tests vector_rank's numpy path.
+numpy>=2.0
+# The workflow linter CI runs, for tools/run_ci_locally.sh.
+actionlint-py>=1.7

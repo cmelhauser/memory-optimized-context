@@ -51,7 +51,7 @@ required a `store/` branch.
 A tag asserts that the repository was in a releasable state at that commit. All of these, in
 this order:
 
-1. `tools/run_ci_locally.sh --image` clean.
+1. `tools/run_ci_locally.sh --image` and `tools/e2e.sh` clean.
 2. CI green on `main` at that commit, including the `container` job.
 3. `CITATION.cff` `version:` equals the tag without the `v`.
 4. `CHANGELOG.md` has a `## [x.y.z]` section for it, and `[Unreleased]` is empty.
@@ -83,7 +83,8 @@ the Human Author asking for it.** Tagging is the routine act; publishing is not.
 - Never commit to `main`. Branch, open a pull request, let CI run.
 - `container` does not run on pull requests, so **a green pull request is not a green
   release**; run `tools/run_ci_locally.sh --image` before merging anything that touches the
-  Dockerfile or the Compose file.
+  Dockerfile or the Compose file, and `tools/e2e.sh` before merging anything that touches the
+  hooks, the Dockerfile, the Compose file or the Reflector.
 - Never create a tag to mark work finished.
 - If you change `lid()`, the schema, or the journal regex, that is a MAJOR release and needs a
   migration in `bin/memory` before anything is tagged.

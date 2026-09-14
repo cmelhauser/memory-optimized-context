@@ -7,19 +7,18 @@ name: CI
 # `lint` is its own job so a style failure reads as a style failure and reports in seconds.
 # The ruleset is narrow by design: syntax errors, pyflakes and bugbear. See ruff.toml.
 #
-# `unit-tests` runs pytest with the coverage gate on `bin/memory`. Pull requests use Python 3.12
+# `unit-tests` runs pytest with the coverage gate in .coveragerc. Pull requests use Python 3.12
 # only; `main` and manual runs cover 3.10 through 3.13, because 3.10 is the floor the tool
 # declares and the Docker image runs 3.12.
 #
 # `container` builds the image on `main` and on demand, not on pull requests. It is the one job
-# with network fetches beyond pip (the base image, apt, and two wheels), so it is kept off the
+# with network fetches beyond pip (the base image, apt, and the pinned wheels), so it is kept off the
 # pull-request path the same way the sibling repository keeps its PDF toolchain off it.
 
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  pull_request:            # any base branch, so a pull request stacked on another is checked too
   workflow_dispatch:
 
 permissions:

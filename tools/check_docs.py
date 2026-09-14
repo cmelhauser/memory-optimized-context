@@ -20,14 +20,14 @@ PROSE = ["README.md", "AGENTS.md", "CLAUDE.md", "HANDOFF.md", "CHANGELOG.md", "C
 
 
 def tracked_files():
-    out = subprocess.run(["git", "-C", str(REPO), "ls-files"], capture_output=True, text=True)
+    out = subprocess.run(["git", "-C", str(REPO), "ls-files"], capture_output=True, text=True, check=False)
     if out.returncode == 0 and out.stdout.strip():
         return [REPO / p for p in out.stdout.split()]
     return [p for p in REPO.rglob("*") if p.is_file() and ".git" not in p.parts and "__pycache__" not in p.parts]
 
 
 def collected_tests():
-    out = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q"], capture_output=True, text=True, cwd=REPO)
+    out = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q"], capture_output=True, text=True, cwd=REPO, check=False)
     m = re.search(r"(\d+) tests? collected", out.stdout) or re.search(r":\s*(\d+)\s*$", out.stdout.strip(), re.M)
     if not m:
         sys.exit(f"could not collect tests:\n{out.stdout}\n{out.stderr}")
