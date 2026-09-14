@@ -73,6 +73,10 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A `learn` longer than ten minutes lost its lock. Any writer that found the lock older than
+  600 s broke it as a crashed holder's, so a Stop hook could write while the `learn` was still
+  running, and SQLite refused it with `database is locked`. The holder now touches the lock
+  every 60 s, so only a crashed holder's lock goes stale. `test_a_live_holder_keeps_its_lock_fresh`.
 - `learn --repo` re-reflected the whole history on every run because `git cat-file -e`
   succeeds silently and the helper treated empty stdout as failure. Caught by
   `test_learn_repo_reads_commits_and_docs_incrementally`.

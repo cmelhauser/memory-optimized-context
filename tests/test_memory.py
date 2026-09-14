@@ -132,6 +132,21 @@ def test_stale_lock_is_broken(m):
     assert not m.LOCK.exists()
 
 
+def test_a_live_holder_keeps_its_lock_fresh(m, monkeypatch):
+    """A `learn` holds the lock for hours. Its heartbeat keeps the lock from ever looking like a crashed holder's,
+    so a Stop hook that arrives after ten minutes waits and gives up instead of breaking in."""
+    monkeypatch.setattr(m, "LOCK_BEAT", 0.02)
+    old = time.time() - 700
+    with m.Lock():
+        os.utime(m.LOCK, (old, old))          # as if the holder had worked for 700 s without a beat
+        time.sleep(0.2)
+        assert time.time() - m.LOCK.stat().st_mtime < 5
+        with pytest.raises(m.LockBusy), m.Lock(wait=0.3):
+            pass
+        assert m.LOCK.exists()
+    assert not m.LOCK.exists()
+
+
 # ------------------------------------------------------------------ journal + compile
 
 
