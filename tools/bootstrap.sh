@@ -27,8 +27,7 @@ gh repo create "$name" --public --source . --remote origin --push \
   --homepage "https://github.com/cmelhauser/memory-optimized-context"
 gh repo edit --enable-issues --enable-wiki=false --delete-branch-on-merge
 echo
-echo "Published. Next:"
-echo "  tools/init_store.sh"
-echo "  cp .env.example .env && \$EDITOR .env"
-echo "  docker compose up -d --build"
-echo "Then tag when CI is green on main:  git tag -a v0.1.0 -m 'v0.1.0: first cut' && git push origin v0.1.0"
+echo "Published. Next, as README.md \"Install\" describes:"
+echo "  tools/init_store.sh     # the store, ~/memory"
+echo "  the hooks from hooks/settings.snippet.json: native by default, the container once .env holds a key"
+echo "Tag only as RELEASING.md describes, once CI is green on main."

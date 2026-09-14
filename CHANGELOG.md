@@ -19,6 +19,20 @@ until the system has run against a real store for at least a month.
 - `test_llm_uses_the_sdk_when_an_api_key_is_present`: the SDK Reflector path, the one both
   installs take when a key is configured, and its fall-through to `claude -p` when `anthropic`
   is not installed.
+- `tools/e2e.sh`: both installs end to end on the operator's machine, against a fake Messages
+  API (the SDK path, as if a key were provided) and a fake `claude` (the subscription path), in
+  throwaway home directories: native with a key, native through the real hooks, a usage limit
+  twice during a backfill and the resumed run, and Docker through Compose with the hooks and MCP
+  over HTTP. Local only; the Docker phase needs Docker Desktop and skips itself beside a real
+  install.
+- Eighteen tests take the suite to full coverage: the lock giving up, `ingest --wait`, the MCP
+  tools on both `mcp` versions and both transports and while busy, the SDK path without its
+  package, the CLI's JSON, every embedding outcome, `journal_write` running out of names, junk
+  lines in a transcript, each script run as `__main__`, every `check_docs.py` failure,
+  `eval_recall.py` in the image's layout, `tools/init_store.sh`, and `tools/bootstrap.sh --dry-run`.
+- `examples/claude_desktop_config.native.json`, beside the Docker one, now `.docker.json`.
+- actionlint in `tools/run_ci_locally.sh`, so the local lint is CI's; `numpy` and `actionlint-py`
+  in `requirements-dev.txt`.
 
 ### Changed
 
@@ -29,6 +43,23 @@ until the system has run against a real store for at least a month.
   `.venv/bin/python3`, then Homebrew's Python (macOS's `/usr/bin/python3` is 3.9), and appends
   `~/.local/bin` to `PATH` so `claude` is found.
   `test_hook_runner_is_native_without_an_api_key_and_docker_with_one`.
+- The Compose image is tagged `memory-optimized-context:compose` instead of `1.0.0`, which read
+  as a release the project has not reached, and the unused `UID=502` is gone.
+- The coverage gate is 100 per cent of lines and branches over `bin/memory`,
+  `tools/check_docs.py` and `tools/eval_recall.py`, with nothing excluded. It had covered lines
+  of `bin/memory` only, with the network clients excluded; those now run against stand-ins.
+- The lint ruleset adds whitespace, the 160-column limit, ambiguous names, lambda assignment,
+  pyupgrade, simplify, pylint errors and warnings, and ruff's own rules, all clean. The E70x
+  one-liner rules stay off by design.
+- The SessionStart hook runs `ingest --wait 2`, so a long `learn` holding the lock costs a new
+  session at most 2 s instead of 20; `ingest --wait SECONDS` is new.
+- The commit cursor is the full hash, which cannot become ambiguous as a repository grows.
+- `tools/init_store.sh` keeps `exports/` out of the store's git history.
+- CI runs on pull requests against any base branch, so a stacked pull request is checked.
+- `tools/bootstrap.sh` points at the README's install rather than a Docker-first sequence, and
+  the eval README's Docker path reads the questions from the mounted checkout.
+- Test fixtures and this changelog use neutral names instead of the operator's private
+  repositories.
 
 ### Fixed
 
@@ -36,8 +67,8 @@ until the system has run against a real store for at least a month.
   succeeds silently and the helper treated empty stdout as failure. Caught by
   `test_learn_repo_reads_commits_and_docs_incrementally`.
 - `learn --transcripts` named each project after the last `-` segment of its encoded folder:
-  `us-hail-cat-model`, `us-hurricane-cat-model` and `global-unified-cat-model` all became
-  `model`, and no slug matched the one the Stop hook uses. The slug now comes from the `cwd`
+  three repositories whose hyphenated names end in `-model` all became `model`, and no slug
+  matched the one the Stop hook uses. The slug now comes from the `cwd`
   recorded in the transcript, through `project_of()`, which the hook shares; a Claude Code
   worktree counts as its repository. `test_learn_transcripts_backfills_claude_code_dirs`,
   `test_hook_files_a_worktree_session_under_its_repository`.
@@ -53,6 +84,34 @@ until the system has run against a real store for at least a month.
   `test_container_home_is_the_host_home`.
 - CI's compose check failed on every run because `.env` is never committed. It now validates
   against `.env.example`, and `tools/run_ci_locally.sh` checks a copy instead of skipping.
+- A Reflector call that failed was taken for "no lessons" and the source's cursor still moved
+  on, so on a subscription a usage limit silently skipped the rest of a backfill. `reflect()` now
+  raises `ReflectorFailed` when no answer comes, and cursors move only past what was reflected: a
+  transcript window by window, commits up to the last one reflected, a doc once its prose is
+  reflected, its tagged lines counted once. `learn` and `ingest` keep and compile what was done
+  and exit non-zero with a message; the next run resumes there. The Stop hook still journals and
+  compiles, and leaves the transcript for the next stop.
+  `test_backfill_stops_at_a_failed_window_and_the_next_run_resumes_there`,
+  `test_learn_stops_on_a_failed_reflector_keeps_its_progress_and_resumes`,
+  `test_hook_still_journals_and_compiles_when_the_reflector_fails`.
+- An SDK error (API, rate limit, network) or a `claude -p` timeout raised through the whole run
+  and rolled it back, and `claude -p` can report an error in its output rather than its exit
+  status. `llm()` now returns no answer for all of them, asks `claude -p` for
+  `--output-format json` so it can read the CLI's own `is_error`, and in `auto` mode falls back
+  from a failed SDK call to the CLI. `test_llm_answers_none_on_sdk_errors_cli_errors_and_timeouts`.
+- `learn_repo` split the log on blank lines, so a commit whose body had paragraphs became several
+  chunks, one of them named after a body word as if it were a hash. Commits are now delimited by
+  `\x1e` and chunked whole. `test_commit_cursor_after_a_failure_is_the_last_reflected_commit`.
+- The transcript reader moved its offset past a half-written last line, which was then never
+  read. `test_a_half_written_last_line_is_left_for_the_next_read`.
+- A writer that could not get the lock raised a bare `SystemExit`, which inside an MCP tool could
+  stop the server during a long `learn`. It is now `LockBusy`: the CLI still exits with its
+  message, and `remember` and `feedback` answer "busy", a remembered lesson staying journaled.
+  `test_mcp_tools_answer_busy_while_a_learn_holds_the_lock`.
+- An embedding call that failed raised through `learn` and rolled back the whole run. It now logs
+  and leaves the vectors for `embed_missing` to fill in later.
+  `test_embed_batches_both_providers_and_never_fails_a_run`.
+- `memory hook --input` left its file open.
 
 ## [0.1.0] - 2026-09-13
 
@@ -79,7 +138,7 @@ until the system has run against a real store for at least a month.
   with a recursion guard for the Reflector's own `claude -p` call.
 - Dockerfile and Compose file: pinned `python:3.12.6-slim-bookworm`, SQLite on a named volume,
   bind mounts at identical host and container paths, MCP on host loopback only.
-- Test suite: forty-six tests, coverage gate at 80 per cent on `bin/memory`, including a six-process
+- Test suite: forty-six tests, coverage gate at eighty per cent on `bin/memory`, including a six-process
   concurrent-hook test.
 - `tools/check_docs.py`: test counts, version, relative links and host paths re-derived from
   the tree; runs in the CI `lint` job.
