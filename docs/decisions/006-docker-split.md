@@ -12,3 +12,8 @@ there.
 
 **Would reopen it.** Running natively is fully supported via `MEMORY_RUNNER`; nothing is lost
 by choosing it.
+
+**Amended 13 September 2026.** A container without an API key has no Reflector, so the hooks
+now default to the native install and reach for the container only when `.env` holds a key
+(`hooks/runner.sh`). The container is the choice for a key; native is the choice for a
+subscription.

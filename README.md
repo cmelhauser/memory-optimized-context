@@ -15,8 +15,9 @@ start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.1.0`. 46 tests, coverage 89 per cent on `bin/memory`, six-process concurrency test green.
-Not yet run against a real store; see `HANDOFF.md`.
+`v0.1.0`. 52 tests, coverage 93 per cent on `bin/memory`, six-process concurrency test green.
+The image is built and smoke-tested on the Mac mini (arm64), and both installs have run end to
+end against a fake Reflector. Not yet run against a real store; see `HANDOFF.md`.
 
 ## What it does
 
@@ -30,16 +31,43 @@ Not yet run against a real store; see `HANDOFF.md`.
 | Automatic pruning | score = (votes + helpful − 2·harmful) × 0.5^(age/90d). Below threshold or harmful ≥ 2 → archived to `archive/YYYY-MM.md`, removed from compiled output, still searchable. |
 | Parallel-safe | One journal file per event (never appended). Single `mkdir` lock around every DB/compiled write. Atomic rename on output. SQLite WAL. |
 
-## Install — Docker (default)
+## Install
 
 Two directories, kept apart on purpose: this repository is the code; `~/memory` is the store,
 its own private git repository, so nothing you push here can publish your lessons.
+
+Which install the hooks use follows from one fact, checked on every run by `hooks/runner.sh`:
+does this checkout's `.env` hold an `ANTHROPIC_API_KEY`?
+
+| Key in `.env` | Install | Reflector (Claude Haiku) |
+|---|---|---|
+| none (the default) | native: `bin/memory` from this checkout | `claude -p` on your subscription; the SDK instead if `ANTHROPIC_API_KEY` is exported and `anthropic` is installed |
+| present | Docker: the `memory` container | the Anthropic SDK in the image |
+
+`MEMORY_RUNNER` overrides the choice. The two installs keep separate databases
+(`~/memory/memory.db` natively, the `memory-db` volume in Docker), so pick one and keep it, or
+carry `memory.db` across when you switch.
+
+### Native (default without an API key)
 
 ```bash
 git clone https://github.com/cmelhauser/memory-optimized-context ~/GitHub/memory-optimized-context
 cd ~/GitHub/memory-optimized-context
 tools/init_store.sh                          # creates ~/memory with its own .git
-cp .env.example .env && $EDITOR .env         # ANTHROPIC_API_KEY
+python3 -m venv .venv && .venv/bin/pip install anthropic==1.5.0 mcp==2.2.0   # MCP server + SDK, the image's pins
+.venv/bin/python3 bin/memory compile
+```
+
+Python 3.10 or newer; macOS's `/usr/bin/python3` is 3.9, so build the venv with Homebrew's. The
+venv is optional. Without it the hooks run Homebrew's `python3`, and reflection still works,
+because `claude -p` needs nothing installed; the hooks find `claude` on `PATH` or in
+`~/.local/bin`. `MEMORY_LLM=none` for keyword-only.
+
+### Docker (with an API key)
+
+```bash
+tools/init_store.sh
+cp .env.example .env && $EDITOR .env         # ANTHROPIC_API_KEY; from now on the hooks use the container
 docker compose up -d --build
 docker exec memory python3 /app/memory compile   # creates compiled/, DB on the memory-db volume
 ```
@@ -53,37 +81,33 @@ What runs where:
 | `journal/`, `compiled/`, `archive/`, `.git` | bind mount `~/memory` | Drive sync and `@` imports need them on the host |
 | `~/.claude/projects` | bind mount, read-only | transcripts for the Reflector |
 | `~/GitHub` | bind mount, read-only | `learn --all`: commit messages and docs |
-| Hooks | host (Claude Code runs there) | 7-line shells that `docker exec` into the container and return |
+| Hooks | host (Claude Code runs there) | short shells that `docker exec` into the container and return |
 
-Paths are mounted at identical locations inside the container, so `transcript_path` from hook JSON needs no translation. The container runs as root per your Docker ground rules (no `--user`); Docker Desktop maps written files to your host user.
+Paths are mounted at identical locations inside the container and the container's `HOME` is
+your host `HOME`, so `transcript_path` from hook JSON needs no translation and `learn --all`
+finds `~/.claude/projects` and `~/GitHub`. The container runs as root per your Docker ground
+rules (no `--user`); Docker Desktop maps written files to your host user.
 
-Reflection uses the Anthropic SDK inside the container. To use your subscription instead, run natively (below) with the `claude` CLI on PATH; the CLI isn't installed in the image.
-
-### Native install (no Docker)
-
-```bash
-tools/init_store.sh
-export MEMORY_RUNNER="python3 $HOME/GitHub/memory-optimized-context/bin/memory"   # in ~/.zshrc
-python3 bin/memory compile
-```
-Python 3.10 or newer; the Xcode command-line-tools Python is too old, use Homebrew's.
-Reflection then uses `claude -p` if on PATH, else `pip3 install anthropic` + `ANTHROPIC_API_KEY`. `MEMORY_LLM=none` for keyword-only.
+Compose refuses to start without `.env`. That is deliberate: the image has no `claude` CLI, so
+a container without a key has no Reflector.
 
 ### Claude Code — `~/.claude/settings.json`
 
+The hooks run from this checkout; the same lines are in `hooks/settings.snippet.json`.
+
 ```json
 { "hooks": {
-  "SessionStart": [{ "hooks": [{ "type": "command", "command": "~/memory/hooks/compile.sh" }] }],
-  "Stop":         [{ "hooks": [{ "type": "command", "command": "~/memory/hooks/journal.sh main" }] }],
-  "SubagentStop": [{ "hooks": [{ "type": "command", "command": "~/memory/hooks/journal.sh sub" }] }]
+  "SessionStart": [{ "hooks": [{ "type": "command", "command": "~/GitHub/memory-optimized-context/hooks/compile.sh" }] }],
+  "Stop":         [{ "hooks": [{ "type": "command", "command": "~/GitHub/memory-optimized-context/hooks/journal.sh main" }] }],
+  "SubagentStop": [{ "hooks": [{ "type": "command", "command": "~/GitHub/memory-optimized-context/hooks/journal.sh sub" }] }]
 }}
 ```
 
 Register the MCP server so Claude can search and save mid-session:
 
 ```bash
+claude mcp add --scope user memory -- ~/GitHub/memory-optimized-context/.venv/bin/python3 ~/GitHub/memory-optimized-context/bin/memory mcp   # native
 claude mcp add --scope user --transport http memory http://127.0.0.1:8765/mcp     # Docker
-claude mcp add --scope user memory -- python3 ~/GitHub/memory-optimized-context/bin/memory mcp   # native
 ```
 
 Each project's `CLAUDE.md`, one line:
@@ -92,7 +116,9 @@ Each project's `CLAUDE.md`, one line:
 @~/memory/compiled/projects/<slug>.md
 ```
 
-`<slug>` is the repo folder name, lowercased. Optional in `~/.claude/CLAUDE.md` (improves signal, no longer required):
+`<slug>` is the repo folder name, lowercased; a session in a Claude Code worktree
+(`<repo>/.claude/worktrees/<name>`) counts as the repository. Optional in `~/.claude/CLAUDE.md`
+(improves signal, no longer required):
 
 ```
 If a durable cross-session fact was learned, end your final message with a LESSONS: block:
@@ -108,13 +134,17 @@ extension does not read that file.
 
 ### Claude Desktop — `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-Claude Desktop only accepts stdio commands, so exec into the container:
+Claude Desktop only accepts stdio commands. Native (needs the venv above):
+
+```json
+{ "mcpServers": { "memory": { "command": "/Users/<you>/GitHub/memory-optimized-context/.venv/bin/python3", "args": ["/Users/<you>/GitHub/memory-optimized-context/bin/memory", "mcp"] } } }
+```
+
+Docker, exec into the container:
 
 ```json
 { "mcpServers": { "memory": { "command": "/usr/local/bin/docker", "args": ["exec", "-i", "memory", "python3", "/app/memory", "mcp"] } } }
 ```
-
-Native: `"command": "python3", "args": ["/Users/<you>/GitHub/memory-optimized-context/bin/memory", "mcp"]` (needs `pip3 install mcp`).
 
 ### claude.ai web / mobile / Cowork
 
@@ -127,8 +157,9 @@ create a NEW file in memory/journal/claude-ai/ containing lines `[project] fact`
 Never edit anything under memory/compiled/.
 ```
 
-Full-history capture from these surfaces: export data monthly, drop `conversations.json` in `~/memory/exports/`, then
-`docker exec memory python3 /app/memory ingest --export "$HOME/memory/exports/conversations.json"`.
+Full-history capture from these surfaces: export data monthly, drop `conversations.json` in
+`~/memory/exports/`, then `memory ingest --export ~/memory/exports/conversations.json`
+(prefixed as under [Commands](#commands)).
 
 ## Learning from everything you already have
 
@@ -137,7 +168,7 @@ database, so it is safe to run daily; a second run over an unchanged source make
 
 | Source | Flag | What is read | Cursor |
 |---|---|---|---|
-| Claude Code transcripts, all projects | `--transcripts` | every `~/.claude/projects/*/*.jsonl`; project from the encoded cwd | byte offset per file |
+| Claude Code transcripts, all projects | `--transcripts` | every `~/.claude/projects/*/*.jsonl`, whole, in ~30k windows; project from the `cwd` recorded in the transcript, a worktree counting as its repository | byte offset per file |
 | A git repository | `--repo PATH` | commit messages (`--no-merges`, oldest first), `README*`, `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `HANDOFF.md`, `docs/**/*.md`, `*.md` | last commit hash; content hash per doc |
 | A folder of notes | `--notes DIR [--project slug]` | every `.md` and `.txt`, recursively | content hash per file |
 | claude.ai export (web, Desktop, mobile, Cowork) | `--export FILE` | `conversations.json`, both message shapes | `updated_at` per conversation |
@@ -146,15 +177,18 @@ database, so it is safe to run daily; a second run over an unchanged source make
 Lines already in the form `[project] fact` (bulleted or not) in any doc or note are ingested
 directly with no LLM call. Everything else goes through the Reflector in windows of about 30k
 characters, one Haiku call per window. A repository with a thousand commits costs roughly ten
-calls the first time and none afterwards. `--since 2025-01-01` bounds the first pass.
+calls the first time and none afterwards. `--since 2025-01-01` bounds the first pass. No notes
+folder is read unless you name one with `--notes`.
 
 ```bash
-docker exec memory python3 /app/memory learn --all --notes "$HOME/Documents/Notes"
+python3 bin/memory learn --all                           # native
+docker exec memory python3 /app/memory learn --all       # Docker
 ```
 
 ## Commands
 
-Prefix with `docker exec memory python3 /app/memory` (Docker) or `python3 ~/GitHub/memory-optimized-context/bin/memory` (native).
+Prefix with `python3 ~/GitHub/memory-optimized-context/bin/memory` (native; `.venv/bin/python3`
+if you made the venv) or `docker exec memory python3 /app/memory` (Docker).
 
 ```
 memory search "query" [--project slug] [-k 8] [--all]
@@ -171,7 +205,7 @@ memory compile
 |---|---|---|
 | `MEMORY_ROOT` | `~/memory` | set in the image to the mounted host path |
 | `MEMORY_DB` | `$MEMORY_ROOT/memory.db` | `/data/memory.db` in Docker |
-| `MEMORY_RUNNER` | `docker exec -i memory python3 /app/memory` | hooks only; set to `python3 <repo>/bin/memory` for native |
+| `MEMORY_RUNNER` | chosen by `hooks/runner.sh` | hooks only: the container if `.env` has `ANTHROPIC_API_KEY`, else `bin/memory` natively; set it to override |
 | `MEMORY_LLM` | `auto` | `sdk` / `cli` / `none` |
 | `MEMORY_MODEL` | `claude-haiku-4-5-20251001` | reflector + contradiction check |
 | `MEMORY_EMBED` | `none` | `voyage` (`VOYAGE_API_KEY`) or `openai` (`OPENAI_API_KEY`) |
@@ -193,10 +227,10 @@ memory compile
 
 ```
 bin/memory                 the tool, one file
-hooks/                     Claude Code hook scripts and the settings.json snippet
+hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       46 tests, six-process concurrency test included
+tests/test_memory.py       52 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
@@ -221,3 +255,7 @@ matching the tree.
 ## Costs
 
 One Haiku call per session stop (transcript tail ≤ 30k chars) plus one per new lesson for the contradiction check. Typical day: a few cents on the API, or a negligible slice of a subscription via `claude -p`. Embeddings, if enabled: one call per new lesson.
+
+The first `learn --all` is the expensive run: one call per ~30k window of every transcript, commit
+log and doc set, which for months of history is hundreds of calls. On a subscription that can
+reach usage limits, so it can be taken a source at a time (`--repo`, `--transcripts`).
