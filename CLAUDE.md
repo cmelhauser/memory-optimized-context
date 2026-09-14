@@ -32,6 +32,8 @@ before editing either.
   the Stop hook and the backfill; a Claude Code worktree counts as its repository.
 - A writer that cannot get the lock raises `LockBusy`; the MCP tools answer "busy" and the
   server keeps running.
+- A lock holder touches `.lock` every 60 s, and only a lock untouched for 600 s is broken as a
+  crashed holder's, so a `learn` of any length keeps its lock.
 - Coverage is 100 per cent of lines and branches over `bin/memory`, `tools/check_docs.py` and
   `tools/eval_recall.py`, with nothing excluded in `.coveragerc`.
 

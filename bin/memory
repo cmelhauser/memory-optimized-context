@@ -22,7 +22,7 @@ Subcommands:
   mcp       MCP server exposing recall / remember / feedback. --transport stdio (Claude Desktop, docker exec -i)
             or --transport http (Claude Code: claude mcp add --transport http memory http://127.0.0.1:8765/mcp)
 """
-import argparse, hashlib, json, math, os, re, shutil, sqlite3, subprocess, sys, tempfile, time, urllib.request
+import argparse, hashlib, json, math, os, re, shutil, sqlite3, subprocess, sys, tempfile, threading, time, urllib.request
 from array import array
 from contextlib import contextmanager, suppress
 from datetime import datetime, timezone
@@ -53,6 +53,7 @@ def log(*a):
 
 # ---------------------------------------------------------------- lock (single writer)
 LOCK_WAIT = 20   # seconds a writer waits for the lock; the SessionStart hook passes `ingest --wait 2`
+LOCK_BEAT = 60   # a holder touches the lock this often, so only a crashed holder's lock goes 600 s untouched
 
 class LockBusy(SystemExit):
     """Another writer held the lock for the whole wait, usually a long `learn`. A SystemExit, so the CLI still exits
@@ -61,17 +62,25 @@ class LockBusy(SystemExit):
 class Lock:
     def __init__(self, wait=None):
         self.wait = LOCK_WAIT if wait is None else wait
+        self.done = threading.Event()
     def __enter__(self):
         ROOT.mkdir(parents=True, exist_ok=True)
         for _ in range(int(self.wait * 10)):
             try:
-                LOCK.mkdir(); return self
+                LOCK.mkdir()
             except FileExistsError:
-                if time.time() - LOCK.stat().st_mtime > 600:   # stale lock from a crash
+                if time.time() - LOCK.stat().st_mtime > 600:   # untouched for 600 s: its holder crashed
                     LOCK.rmdir(); continue
                 time.sleep(0.1)
+            else:
+                threading.Thread(target=self.beat, daemon=True).start(); return self
         raise LockBusy(f"memory: the lock was held for all of {self.wait:g} s (a long `learn`?); try again when it ends")
+    def beat(self):
+        """Keep the lock fresh for as long as it is held; a `learn` can hold it for hours."""
+        while not self.done.wait(LOCK_BEAT):
+            with suppress(FileNotFoundError): os.utime(LOCK)
     def __exit__(self, *e):
+        self.done.set()
         with suppress(FileNotFoundError): LOCK.rmdir()
 
 
