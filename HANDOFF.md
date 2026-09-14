@@ -4,7 +4,7 @@
 no memory of this project and no access to any prior session. Everything you need is in this
 repository. Read this file, then `AGENTS.md`, then `CLAUDE.md`.
 
-Last updated 14 September 2026, when #1 and #2 were merged.
+Last updated 14 September 2026, after Docker Desktop was restarted and the image rebuilt.
 
 ## State
 
@@ -25,8 +25,8 @@ real `~/memory` store, and nothing is installed on the Mac mini: no `~/memory`, 
 2. Install natively, as the README says: `tools/init_store.sh`; the three hooks from
    `hooks/settings.snippet.json` in `~/.claude/settings.json`; optionally the `.venv`, then
    `claude mcp add` and `examples/claude_desktop_config.native.json` for the MCP server. The
-   Docker install is not needed; on the Mac mini it would first need Docker Desktop's builder
-   working again (see the log).
+   Docker install is not needed; its image is built and tested on the Mac mini, but nothing
+   runs it (see the log).
 3. Add `@~/memory/compiled/projects/<slug>.md` to each project's `CLAUDE.md`.
 4. Backfill. Start with one repository (`learn --repo`) and read `compiled/projects/`, to judge
    the Reflector prompt before it runs over everything. Then `learn --all`: a usage limit stops
@@ -37,6 +37,20 @@ real `~/memory` store, and nothing is installed on the Mac mini: no `~/memory`, 
 ## Handoff log
 
 Newest first.
+
+### 14 September 2026 — Docker Desktop restarted, image rebuilt
+
+- Docker Desktop was restarted at the Human Author's request, which cleared the builder
+  timeout: the base image's metadata loads in under 2 s again.
+- The Human Author's other containers stopped with the restart, although their policy is
+  `unless-stopped`. They were started by hand and came back healthy. Expect the same after the
+  next restart, and check `docker ps`.
+- `memory-optimized-context:compose` was rebuilt from `main` with `--pull --no-cache`, with the
+  commit in its `org.opencontainers.image.revision` label. Its `/app/memory` matches
+  `bin/memory` byte for byte. A throwaway container compiled an empty store and answered MCP
+  `initialize` over HTTP, and `tools/e2e.sh` passed its 41 checks, the Docker phase included.
+- Nothing runs the image: there is no `memory` container, no `.env` and no `~/memory`. The
+  install and the backfill wait, as the next steps say.
 
 ### 14 September 2026 — #1 and #2 merged
 
