@@ -21,3 +21,6 @@ htmlcov/
 
 # Your own eval set is about your store, not the code.
 eval/questions.jsonl
+
+# Session handoffs describe the operator's machine and plans; they stay local.
+HANDOFF.md

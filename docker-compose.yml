@@ -13,7 +13,6 @@ services:
     build: .
     image: memory-optimized-context:compose  # built here by Compose; not a release version
     container_name: memory
-    platform: linux/arm64
     restart: unless-stopped
     env_file: .env                         # ANTHROPIC_API_KEY, optional VOYAGE_API_KEY / MEMORY_EMBED
     environment:

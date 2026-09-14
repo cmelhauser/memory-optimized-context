@@ -1151,7 +1151,7 @@ def test_the_scripts_run_as_main(m, tmp_path, monkeypatch, capsys):
 
 def test_check_docs_reports_every_kind_of_drift(tmp_path, monkeypatch, capsys):
     """Each check failing once: a stale count, a stale coverage gate, a version with no changelog section, a broken
-    link, a home path. External links, anchors, placeholders and images are left alone."""
+    link, a home path, an email address. External links, anchors, placeholders and images are left alone."""
     cd = load_tool("check_docs")
     for name in cd.PROSE:
         (tmp_path / name).write_text("fine\n")
@@ -1160,7 +1160,8 @@ def test_check_docs_reports_every_kind_of_drift(tmp_path, monkeypatch, capsys):
     (tmp_path / "CITATION.cff").write_text('version: "9.9.9"\n')
     (tmp_path / ".coveragerc").write_text("[report]\nfail_under = 100\n")
     home = "/" + "Users" + "/someone"
-    (tmp_path / "notes.txt").write_text(f"see {home}/x, not /Users/<you>/y\n")
+    address = "someone" + "@" + "mail.test"
+    (tmp_path / "notes.txt").write_text(f"see {home}/x, not /Users/<you>/y or /home/me/z; mail {address}, not noreply@anthropic.com\n")
     (tmp_path / "pic.png").write_bytes(home.encode())
     monkeypatch.setattr(cd, "REPO", tmp_path)
     monkeypatch.setattr(cd, "collected_tests", lambda: 7)
@@ -1172,7 +1173,8 @@ def test_check_docs_reports_every_kind_of_drift(tmp_path, monkeypatch, capsys):
     assert "CHANGELOG.md has no section for CITATION.cff version 9.9.9" in out
     assert "README.md: broken link missing.md" in out and "example.com" not in out
     assert "notes.txt:1: host-specific home path" in out and "pic.png" not in out
-    assert "5 problem(s)" in out
+    assert "notes.txt:1: email address" in out and out.count("email address") == 1
+    assert "6 problem(s)" in out
 
 
 def test_check_docs_stops_when_pytest_cannot_collect(monkeypatch):

@@ -26,6 +26,8 @@ keep the guarantees in `README.md` under "Guarantees" intact.
 - A committed memory store, transcript, or export. Those are the operator's own conversations.
 - The name of anything private to the operator: a repository, a folder, a conversation. Tests
   and fixtures use neutral names.
+- Personal data: a name, an email address, a home path, or details of the operator's machine.
+  `tools/check_docs.py` rejects email addresses and home paths.
 
 ## Branch naming and versions
 

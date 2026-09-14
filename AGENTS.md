@@ -34,14 +34,17 @@ Anthropic Claude. See `ATTRIBUTION.md` and `LICENSE`.
 6. **Keep the file single.** Do not split `bin/memory` into a package. Its whole value is that
    it installs by copying one file.
 7. **Keep the prose true.** `tools/check_docs.py` runs in CI. If you add a test, the counts in
-   `README.md`, `AGENTS.md`, `HANDOFF.md`, `CHANGELOG.md` and `RELEASING.md` must move with it.
+   `README.md`, `AGENTS.md`, `CHANGELOG.md` and `RELEASING.md` must move with it.
 8. **`main` takes no direct commits.** Branch, open a pull request, let CI run. See
    `RELEASING.md`.
 9. **Keep coverage whole.** `.coveragerc` holds `bin/memory`, `tools/check_docs.py` and
    `tools/eval_recall.py` to 100 per cent of lines and branches with nothing excluded. New code
    arrives with the test that runs it; never add an exclusion to get past the gate.
-10. **Name nothing private.** The repository is public. Tests, fixtures, prose and pull requests
-    use neutral names, never the operator's own repositories, folders or conversations.
+10. **Name nothing private, and no one.** The repository is public. Tests, fixtures, prose and
+    pull requests use neutral names, never the operator's own repositories, folders or
+    conversations, and carry no personal data: no names, email addresses, home paths or details
+    of the operator's machine. `tools/check_docs.py` rejects email addresses and home paths.
+    Session handoffs go in an untracked `HANDOFF.md`, which `.gitignore` keeps out.
 
 ## Where things are
 

@@ -36,6 +36,7 @@ until the system has run against a real store for at least a month.
 
 ### Changed
 
+- README gives Claude Desktop's config path on Windows as well as macOS.
 - The hooks choose their runner in `hooks/runner.sh`: `MEMORY_RUNNER` if set, else the container
   when this checkout's `.env` holds an `ANTHROPIC_API_KEY`, else `bin/memory` natively with
   `claude -p`. Native was opt-in before; without a key it is now the default, because the image
@@ -60,6 +61,15 @@ until the system has run against a real store for at least a month.
   the eval README's Docker path reads the questions from the mounted checkout.
 - Test fixtures and this changelog use neutral names instead of the operator's private
   repositories.
+
+### Removed
+
+- Personal data from the tracked files: the Human Author's name and both email addresses (README,
+  `AGENTS.md`, `ATTRIBUTION.md`, `CITATION.cff`, `LICENSE`, the Reflector prompt), and details of
+  the operator's machine in the docs, tests and eval examples. `tools/check_docs.py` now rejects
+  any email address and any `/home/<name>` path.
+- `HANDOFF.md` from the repository. Session handoffs stay in an untracked, git-ignored copy.
+- The Compose file's `platform: linux/arm64`; Compose builds for the host's architecture.
 
 ### Fixed
 
