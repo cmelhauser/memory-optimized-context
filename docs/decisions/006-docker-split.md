@@ -1,6 +1,7 @@
 # 006. Container for the tool, host for the hooks
 
-**Context.** Claude Code runs on the host. The Mac mini has 8 GB shared with Bitcoin Core.
+**Context.** Claude Code runs on the host. The host may be a small machine whose memory other
+long-running services share.
 
 **Decision.** `bin/memory`, the Reflector and the MCP server run in one pinned container capped
 at 256 MB. Hooks stay on the host and `docker exec` in. The database is on a named volume; the

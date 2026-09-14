@@ -6,8 +6,6 @@ version: "0.1.0"
 date-released: 2026-09-13
 repository-code: "https://github.com/cmelhauser/memory-optimized-context"
 authors:
-  - family-names: "Melhauser"
-    given-names: "Christopher"
-    email: "christopher.melhauser@gmail.com"
+  - name: "The memory-optimized-context authors"
 license: "Unlicense"
 abstract: "A single-file, parallel-safe personal memory system for Claude: append-only journals, one locked compiler, hybrid keyword and vector recall, contradiction-aware ADD-only updates, decay-based pruning, and adapters for Claude Code, Claude Desktop and claude.ai exports. Acknowledges AI collaboration by theonlymuffinbot using Anthropic Claude."

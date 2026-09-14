@@ -7,7 +7,7 @@ scoring, chunking, the prompt, or the embedding setting. If the number drops, re
 `questions.jsonl` (git-ignored; it is about your store) has one object per line:
 
 ```json
-{"query": "dbcache after IBD", "project": "bitcoin-node", "expect": ["1024"]}
+{"query": "maxconn after the migration", "project": "db-server", "expect": ["1024"]}
 ```
 
 `expect` is a list of substrings; the question counts as recalled if any active lesson in the

@@ -136,11 +136,11 @@ def test_stale_lock_is_broken(m):
 
 
 def test_journal_ingest_dedupes_and_compiles(m):
-    journal(m, ["[all] Never pass GID=20", "[bitcoin-node] Pin every tag"], name="a.md")
+    journal(m, ["[all] Never pass GID=20", "[db-server] Pin every tag"], name="a.md")
     journal(m, ["[all] Never pass GID=20"], name="b.md")
     run_ingest(m)
     assert (m.COMPILED / "PLAYBOOK.md").read_text() == "- (2) Never pass GID=20\n"
-    assert (m.COMPILED / "projects" / "bitcoin-node.md").read_text() == "- (1) Pin every tag\n"
+    assert (m.COMPILED / "projects" / "db-server.md").read_text() == "- (1) Pin every tag\n"
 
 
 def test_journal_files_are_ingested_once(m):
@@ -193,11 +193,11 @@ def test_git_commit_on_compile_when_repo_present(m):
 
 
 def test_search_is_keyword_and_project_scoped(m):
-    journal(m, ["[all] dbcache=4000 during IBD", "[btc] Chart uses log scale", "[other] dbcache unrelated"])
+    journal(m, ["[all] maxconn=4000 during the migration", "[charts] Chart uses log scale", "[other] maxconn unrelated"])
     run_ingest(m)
     with m.db() as c:
-        assert [r["project"] for r in m.search(c, "dbcache", project="btc")] == ["all"]
-        assert len(m.search(c, "dbcache")) == 2
+        assert [r["project"] for r in m.search(c, "maxconn", project="charts")] == ["all"]
+        assert len(m.search(c, "maxconn")) == 2
         assert m.search(c, "") == []
 
 
@@ -275,16 +275,16 @@ def test_llm_cli_success_and_recursion_guard(tmp_path, monkeypatch):
 
 def test_contradiction_supersedes_older_and_keeps_it_searchable(m, monkeypatch):
     with m.db() as c:
-        old, _ = m.upsert(c, "node", "dbcache=4000 during IBD")
+        old, _ = m.upsert(c, "node", "maxconn=4000 during the migration")
         c.commit()
     monkeypatch.setattr(m, "llm", fake_llm([], {"same": [], "contradicts": [old]}))
-    journal(m, ["[node] dbcache=1024 post-IBD"])
+    journal(m, ["[node] maxconn=1024 post-migration"])
     run_ingest(m)
     with m.db() as c:
         row = c.execute("SELECT state, superseded_by FROM lessons WHERE id=?", (old,)).fetchone()
         assert row["state"] == "superseded" and row["superseded_by"]
-        assert [r["text"] for r in m.search(c, "dbcache")] == ["dbcache=1024 post-IBD"]
-        assert len(m.search(c, "dbcache", include_archived=True)) == 2
+        assert [r["text"] for r in m.search(c, "maxconn")] == ["maxconn=1024 post-migration"]
+        assert len(m.search(c, "maxconn", include_archived=True)) == 2
     assert "4000" not in (m.COMPILED / "projects" / "node.md").read_text()
 
 
@@ -338,8 +338,8 @@ def test_claude_code_transcript_is_parsed_incrementally(m, tmp_path):
 
 def test_ingest_transcript_stores_cursor(m, tmp_path, monkeypatch):
     p = tmp_path / "t.jsonl"
-    transcript(p, [("user", "set dbcache"), ("assistant", "done")])
-    monkeypatch.setattr(m, "llm", fake_llm([{"project": "node", "text": "dbcache=1024"}], {}))
+    transcript(p, [("user", "set maxconn"), ("assistant", "done")])
+    monkeypatch.setattr(m, "llm", fake_llm([{"project": "node", "text": "maxconn=1024"}], {}))
     with m.db() as c:
         new = m.ingest_transcript(c, p, "node")
         assert new and new[0][1]
@@ -350,14 +350,14 @@ def test_ingest_transcript_stores_cursor(m, tmp_path, monkeypatch):
 
 def test_export_ingest_is_idempotent_per_updated_at(m, tmp_path, monkeypatch):
     exp = tmp_path / "conversations.json"
-    conv = [{"uuid": "u1", "name": "Bitcoin Node!", "updated_at": "2026-09-13T10:00:00Z",
-             "chat_messages": [{"sender": "human", "text": "IBD done"}, {"sender": "assistant", "text": "ok"}]}]
+    conv = [{"uuid": "u1", "name": "Db Server!", "updated_at": "2026-09-13T10:00:00Z",
+             "chat_messages": [{"sender": "human", "text": "migration done"}, {"sender": "assistant", "text": "ok"}]}]
     exp.write_text(json.dumps(conv))
     calls = []
 
     def f(prompt, system="", max_tokens=0):
         calls.append(prompt)
-        return json.dumps([{"project": "bitcoin-node", "text": "dbcache=1024 post-IBD"}])
+        return json.dumps([{"project": "db-server", "text": "maxconn=1024 post-migration"}])
 
     monkeypatch.setattr(m, "llm", f)
     with m.db() as c:
@@ -367,7 +367,7 @@ def test_export_ingest_is_idempotent_per_updated_at(m, tmp_path, monkeypatch):
         exp.write_text(json.dumps(conv))
         m.ingest_export(c, exp)
     assert len(calls) == 2
-    assert "Default project for this conversation: bitcoin-node" in calls[0]
+    assert "Default project for this conversation: db-server" in calls[0]
 
 
 # ------------------------------------------------------------------ prune
@@ -400,7 +400,7 @@ def test_score_decays_with_age(m):
 
 
 def hook_json(tmp_path, msg, transcript_path=None):
-    j = {"session_id": "s", "cwd": "/tmp/x/btc-dashboard", "last_assistant_message": msg}
+    j = {"session_id": "s", "cwd": "/tmp/x/chart-dashboard", "last_assistant_message": msg}
     if transcript_path:
         j["transcript_path"] = str(transcript_path)
     p = tmp_path / "hook.json"
@@ -409,10 +409,10 @@ def hook_json(tmp_path, msg, transcript_path=None):
 
 
 def test_cmd_hook_journals_lessons_and_derives_project(m, tmp_path):
-    p = hook_json(tmp_path, "Done.\n\nLESSONS:\n[btc-dashboard] log scale\n[all] gid rule\nnot a lesson\n")
+    p = hook_json(tmp_path, "Done.\n\nLESSONS:\n[chart-dashboard] log scale\n[all] gid rule\nnot a lesson\n")
     m.main.__globals__["sys"].argv = ["memory", "hook", "--role", "sub", "--input", str(p)]
     m.main()
-    assert (m.COMPILED / "projects" / "btc-dashboard.md").read_text() == "- (1) log scale\n"
+    assert (m.COMPILED / "projects" / "chart-dashboard.md").read_text() == "- (1) log scale\n"
     assert (m.COMPILED / "PLAYBOOK.md").read_text() == "- (1) gid rule\n"
     assert len(list(m.JOURNAL.glob("**/*-sub.md"))) == 1
 
@@ -515,16 +515,16 @@ def test_sqlite_fts5_available():
 
 
 def test_eval_recall_reports_hits_and_misses(m, tmp_path, capsys):
-    journal(m, ["[all] Never pass GID=20", "[node] dbcache=1024 post-IBD"])
+    journal(m, ["[all] Never pass GID=20", "[node] maxconn=1024 post-migration"])
     run_ingest(m)
     q = tmp_path / "q.jsonl"
     q.write_text(json.dumps({"query": "GID", "project": "all", "expect": ["GID=20"]}) + "\n"
-                 + json.dumps({"query": "dbcache", "project": "node", "expect": ["4000"]}) + "\n")
+                 + json.dumps({"query": "maxconn", "project": "node", "expect": ["4000"]}) + "\n")
     sys.path.insert(0, str(REPO / "tools"))
     import eval_recall
     assert eval_recall.main([str(q), "--min", "0.9"]) == 1
     out = capsys.readouterr().out
-    assert "recall@8: 1/2" in out and "miss: dbcache" in out
+    assert "recall@8: 1/2" in out and "miss: maxconn" in out
     assert eval_recall.main([str(q), "--min", "0.5"]) == 0
 
 
@@ -609,8 +609,8 @@ def test_learn_repo_on_a_plain_folder_still_reads_docs(m, tmp_path, monkeypatch)
 def test_learn_notes_ingests_tagged_lines_and_reflects_prose(m, tmp_path, monkeypatch):
     notes = tmp_path / "notes"
     (notes / "sub").mkdir(parents=True)
-    (notes / "a.md").write_text("[all] Prefer blunt answers\n\nWe decided the node runs on the mini.\n")
-    (notes / "sub" / "b.txt").write_text("[node] dbcache=1024 post-IBD\n")
+    (notes / "a.md").write_text("[all] Prefer blunt answers\n\nWe decided the node runs on the spare host.\n")
+    (notes / "sub" / "b.txt").write_text("[node] maxconn=1024 post-migration\n")
     (notes / "c.md").write_text("[only] tagged\n")
     calls = []
     monkeypatch.setattr(m, "llm", tracing_llm(calls))
@@ -1151,7 +1151,7 @@ def test_the_scripts_run_as_main(m, tmp_path, monkeypatch, capsys):
 
 def test_check_docs_reports_every_kind_of_drift(tmp_path, monkeypatch, capsys):
     """Each check failing once: a stale count, a stale coverage gate, a version with no changelog section, a broken
-    link, a home path. External links, anchors, placeholders and images are left alone."""
+    link, a home path, an email address. External links, anchors, placeholders and images are left alone."""
     cd = load_tool("check_docs")
     for name in cd.PROSE:
         (tmp_path / name).write_text("fine\n")
@@ -1160,7 +1160,8 @@ def test_check_docs_reports_every_kind_of_drift(tmp_path, monkeypatch, capsys):
     (tmp_path / "CITATION.cff").write_text('version: "9.9.9"\n')
     (tmp_path / ".coveragerc").write_text("[report]\nfail_under = 100\n")
     home = "/" + "Users" + "/someone"
-    (tmp_path / "notes.txt").write_text(f"see {home}/x, not /Users/<you>/y\n")
+    address = "someone" + "@" + "mail.test"
+    (tmp_path / "notes.txt").write_text(f"see {home}/x, not /Users/<you>/y or /home/me/z; mail {address}, not noreply@anthropic.com\n")
     (tmp_path / "pic.png").write_bytes(home.encode())
     monkeypatch.setattr(cd, "REPO", tmp_path)
     monkeypatch.setattr(cd, "collected_tests", lambda: 7)
@@ -1172,7 +1173,8 @@ def test_check_docs_reports_every_kind_of_drift(tmp_path, monkeypatch, capsys):
     assert "CHANGELOG.md has no section for CITATION.cff version 9.9.9" in out
     assert "README.md: broken link missing.md" in out and "example.com" not in out
     assert "notes.txt:1: host-specific home path" in out and "pic.png" not in out
-    assert "5 problem(s)" in out
+    assert "notes.txt:1: email address" in out and out.count("email address") == 1
+    assert "6 problem(s)" in out
 
 
 def test_check_docs_stops_when_pytest_cannot_collect(monkeypatch):

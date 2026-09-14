@@ -233,7 +233,7 @@ def search(c, q, project=None, k=8, include_archived=False):
 
 
 # ---------------------------------------------------------------- reflect (transcript → lessons)
-REFLECT_SYS = ("You extract durable, reusable lessons from a conversation between a user (Christopher) and an AI assistant. "
+REFLECT_SYS = ("You extract durable, reusable lessons from a conversation between a user and an AI assistant. "
                "A lesson is a fact, preference, correction, constraint, or decision that would change how the assistant acts in a FUTURE session. "
                "Skip task progress, pleasantries, and anything only true today. Prefer exact tokens (flags, filenames, versions). "
                "Never include secrets, credentials, health, or financial details. Output ONLY a JSON array of "
@@ -673,7 +673,7 @@ def cmd_mcp(a):
 
     @srv.tool()
     def recall(query: str, project: str = "", k: int = 8) -> str:
-        """Search Christopher's long-term memory. Returns ranked lessons with ids."""
+        """Search the user's long-term memory. Returns ranked lessons with ids."""
         with db() as c:
             rs = search(c, query, project or None, k)
         return "\n".join(f"{r['id']} ({r['votes']}) [{r['project']}] {r['text']}" for r in rs) or "no matches"

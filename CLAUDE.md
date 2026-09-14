@@ -3,7 +3,8 @@
 Read `AGENTS.md` first; this file is the long form. Work directly in this repository. Preserve
 unrelated user work. Never commit a home directory path: the Compose file uses `${HOME}` and the
 hooks use `$HOME` for that reason. Never commit the name of anything private to the operator
-either; the repository is public.
+either, or any personal data (a name, an email address, details of the operator's machine); the
+repository is public. Session handoffs go in `HANDOFF.md`, which is git-ignored.
 
 ## Authority
 

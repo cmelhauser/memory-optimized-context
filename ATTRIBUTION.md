@@ -5,15 +5,16 @@
 *memory-optimized-context*, its code, hooks, container definition, tests, and documentation are
 credited as follows:
 
-- Human Author: **Christopher Melhauser** (`christopher.melhauser@gmail.com`)
-- AI Collaborator: **theonlymuffinbot** (`theonlymuffinbot@outlook.com`)
+- Human Author: the repository owner
+- AI Collaborator: **theonlymuffinbot**
 
 "theonlymuffinbot" is the project's label for AI-assisted design and coding collaboration using
 Anthropic Claude. It is an acknowledgment of that collaboration, not a legal author or rights
 holder.
 
-Christopher Melhauser is the human author and legal rights contact for the original project
-material. The original project material is dedicated to the public domain under The Unlicense.
+The repository owner is the human author and legal rights contact for the original project
+material, reachable through the repository on GitHub. The original project material is
+dedicated to the public domain under The Unlicense.
 The project requests, but does not require, the courtesy credit above; see `LICENSE` for the
 dedication and its scope.
 

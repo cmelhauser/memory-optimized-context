@@ -102,9 +102,9 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      # Built for amd64 here because that is what the runner is; the compose file pins arm64
-      # for the Mac mini. The Dockerfile has no architecture-specific steps, so a green amd64
-      # build is evidence the arm64 build will succeed; the release workflow builds both.
+      # Built for amd64 here because that is what the runner is. The Dockerfile has no
+      # architecture-specific steps, so a green amd64 build is evidence the arm64 build will
+      # succeed; the release workflow builds both.
       - name: Build
         uses: docker/build-push-action@v6
         with:

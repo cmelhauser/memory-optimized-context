@@ -70,8 +70,8 @@ FTS5 BM25 over `text`, top 30, fused by reciprocal rank with an optional cosine 
 stored embeddings, top 30. Default search returns `active` only; `--all` adds `superseded` and
 `archived` but never `merged`, because a merged lesson's votes now live in its survivor.
 
-Embeddings are off by default. The corpus is dense with exact tokens (`dbcache`, `rpcauth`,
-`bitcoin-net`) that BM25 handles and embeddings blur; see `docs/research.md`.
+Embeddings are off by default. The corpus is dense with exact tokens (`maxconn`, `safe.directory`,
+`GID=20`) that BM25 handles and embeddings blur; see `docs/research.md`.
 
 ## Concurrency
 

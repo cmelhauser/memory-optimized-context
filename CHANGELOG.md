@@ -36,6 +36,7 @@ until the system has run against a real store for at least a month.
 
 ### Changed
 
+- README gives Claude Desktop's config path on Windows as well as macOS.
 - The hooks choose their runner in `hooks/runner.sh`: `MEMORY_RUNNER` if set, else the container
   when this checkout's `.env` holds an `ANTHROPIC_API_KEY`, else `bin/memory` natively with
   `claude -p`. Native was opt-in before; without a key it is now the default, because the image
@@ -61,19 +62,28 @@ until the system has run against a real store for at least a month.
 - Test fixtures and this changelog use neutral names instead of the operator's private
   repositories.
 
+### Removed
+
+- Personal data from the tracked files: the Human Author's name and both email addresses (README,
+  `AGENTS.md`, `ATTRIBUTION.md`, `CITATION.cff`, `LICENSE`, the Reflector prompt), and details of
+  the operator's machine in the docs, tests and eval examples. `tools/check_docs.py` now rejects
+  any email address and any `/home/<name>` path.
+- `HANDOFF.md` from the repository. Session handoffs stay in an untracked, git-ignored copy.
+- The Compose file's `platform: linux/arm64`; Compose builds for the host's architecture.
+
 ### Fixed
 
 - `learn --repo` re-reflected the whole history on every run because `git cat-file -e`
   succeeds silently and the helper treated empty stdout as failure. Caught by
   `test_learn_repo_reads_commits_and_docs_incrementally`.
 - `learn --transcripts` named each project after the last `-` segment of its encoded folder:
-  three repositories whose hyphenated names end in `-model` all became `model`, and no slug
+  repositories whose hyphenated names shared a last segment all got the same slug, and no slug
   matched the one the Stop hook uses. The slug now comes from the `cwd`
   recorded in the transcript, through `project_of()`, which the hook shares; a Claude Code
   worktree counts as its repository. `test_learn_transcripts_backfills_claude_code_dirs`,
   `test_hook_files_a_worktree_session_under_its_repository`.
 - `learn --transcripts` reflected only the last 30k characters of each transcript, about 6 per
-  cent of the history on the Mac mini. A backfill now reflects every ~30k window; the Stop hook
+  cent of one real history. A backfill now reflects every ~30k window; the Stop hook
   keeps its one-call tail. `test_backfill_reflects_every_window_but_the_hook_only_the_tail`.
 - `reflect_batches` budgeted the text but not the `### name` headers or the label, so the
   Reflector's 30k tail cut dropped the head of any window made of many short commits.

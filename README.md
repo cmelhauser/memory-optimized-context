@@ -2,8 +2,8 @@
 
 *A single-file, parallel-safe long-term memory for Claude.*
 
-Human Author: Christopher Melhauser (christopher.melhauser@gmail.com)
-AI Collaborator: theonlymuffinbot (theonlymuffinbot@outlook.com), using Anthropic Claude
+Human Author: the repository owner
+AI Collaborator: theonlymuffinbot, using Anthropic Claude
 
 See [ATTRIBUTION.md](ATTRIBUTION.md) for the authorship and rights statement, and
 [LICENSE](LICENSE) for the public-domain dedication and courtesy-credit request.
@@ -17,9 +17,8 @@ start, and never lets two processes write the same file.
 
 `v0.1.0`. 76 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
-The image is built and smoke-tested on the Mac mini (arm64), and `tools/e2e.sh` runs both
-installs end to end against a fake Reflector. Not yet run against a real store; see
-`HANDOFF.md`.
+The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
+both installs end to end against a fake Reflector. Not yet run against a real store.
 
 ## What it does
 
@@ -134,16 +133,18 @@ Nothing extra. The extensions run the same Claude Code and share `~/.claude/sett
 the MCP server with `claude mcp add --scope user`, not through VS Code's own `mcp.json`; the
 extension does not read that file.
 
-### Claude Desktop — `~/Library/Application Support/Claude/claude_desktop_config.json`
+### Claude Desktop
 
-Claude Desktop only accepts stdio commands; both configs are also in `examples/`. Native (needs the
-venv above):
+The config is `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS and
+`%APPDATA%\Claude\claude_desktop_config.json` on Windows. Claude Desktop only accepts stdio
+commands; both configs are also in `examples/`. Native (needs the venv above; put your own home
+directory in place of `/Users/<you>`):
 
 ```json
 { "mcpServers": { "memory": { "command": "/Users/<you>/GitHub/memory-optimized-context/.venv/bin/python3", "args": ["/Users/<you>/GitHub/memory-optimized-context/bin/memory", "mcp"] } } }
 ```
 
-Docker, exec into the container:
+Docker, exec into the container (use the path `command -v docker` prints):
 
 ```json
 { "mcpServers": { "memory": { "command": "/usr/local/bin/docker", "args": ["exec", "-i", "memory", "python3", "/app/memory", "mcp"] } } }
