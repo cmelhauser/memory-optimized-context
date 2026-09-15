@@ -31,6 +31,9 @@ until the system has run against a real store for at least a month.
   lines in a transcript, each script run as `__main__`, every `check_docs.py` failure,
   `eval_recall.py` in the image's layout, `tools/init_store.sh`, and `tools/bootstrap.sh --dry-run`.
 - `examples/claude_desktop_config.native.json`, beside the Docker one, now `.docker.json`.
+- Cursor agent transcripts. Cursor runs the hooks in `~/.claude/settings.json`, and its
+  transcripts mark a turn with `role` rather than `type`; the reader takes either, so a Cursor
+  session's Stop hook learns from it. `test_cursor_transcript_lines_are_read_like_claude_codes`.
 - actionlint in `tools/run_ci_locally.sh`, so the local lint is CI's; `numpy` and `actionlint-py`
   in `requirements-dev.txt`.
 
@@ -73,6 +76,9 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- `learn --repo` on a folder that does not exist exited 0 having read nothing, so a typo passed
+  for success. It now fails with `no such folder` before taking the lock.
+  `test_learn_repo_refuses_a_folder_that_does_not_exist`.
 - A `learn` longer than ten minutes lost its lock. Any writer that found the lock older than
   600 s broke it as a crashed holder's, so a Stop hook could write while the `learn` was still
   running, and SQLite refused it with `database is locked`. The holder now touches the lock

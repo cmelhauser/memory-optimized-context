@@ -335,8 +335,8 @@ def ingest_journal(c):
     return new
 
 def transcript_turns(path, start=0):
-    """Claude Code JSONL transcript → ([(turn text, byte offset just past it)], end offset). Incremental from a byte
-    offset. A last line with no newline is still being written: it is left for the next read, not skipped."""
+    """Claude Code or Cursor JSONL transcript → ([(turn text, byte offset just past it)], end offset). Incremental from
+    a byte offset. A last line with no newline is still being written: it is left for the next read, not skipped."""
     out, pos = [], start
     with open(path, "rb") as f:
         f.seek(start)
@@ -345,11 +345,12 @@ def transcript_turns(path, start=0):
             pos += len(raw)
             try: j = json.loads(raw)
             except json.JSONDecodeError: continue
-            if not isinstance(j, dict) or j.get("type") not in ("user", "assistant"): continue
+            kind = (j.get("type") or j.get("role")) if isinstance(j, dict) else None   # Claude Code: type; Cursor: role
+            if kind not in ("user", "assistant"): continue
             content = j.get("message", {}).get("content", "")
             if isinstance(content, list):
                 content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
-            if content.strip(): out.append((f"{j['type'].upper()}: {content.strip()}", pos))
+            if content.strip(): out.append((f"{kind.upper()}: {content.strip()}", pos))
     return out, pos
 
 def claude_code_turns(path, start=0):
@@ -636,6 +637,8 @@ def cmd_ingest(a):
 def cmd_learn(a):
     """Read everything once, then only what changed. Idempotent; cursors live in `sources`. At the first
     ReflectorFailed it stops, keeps and compiles what was read, and exits non-zero; the next run resumes there."""
+    missing = [r for r in a.repo or [] if not Path(r).expanduser().is_dir()]
+    if missing: sys.exit(f"memory: learn --repo: no such folder: {', '.join(missing)}")   # a typo must not pass for success
     with Lock(), db() as c:
         new = ingest_journal(c)
         with stopping(new) as failed:

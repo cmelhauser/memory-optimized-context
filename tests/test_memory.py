@@ -351,6 +351,18 @@ def test_claude_code_transcript_is_parsed_incrementally(m, tmp_path):
     assert text2 == "USER: more" and end2 > end
 
 
+def test_cursor_transcript_lines_are_read_like_claude_codes(m, tmp_path):
+    """Cursor runs the same hooks and writes `role` where Claude Code writes `type`. Tool calls and its
+    end-of-turn marker are not turns."""
+    p = tmp_path / "cursor.jsonl"
+    lines = [{"role": "user", "message": {"content": [{"type": "text", "text": "add a retry"}]}},
+             {"role": "assistant", "message": {"content": [{"type": "text", "text": "done"}, {"type": "tool_use", "name": "Edit"}]}},
+             {"type": "turn_ended", "status": "success"}]
+    p.write_text("".join(json.dumps(x) + "\n" for x in lines))
+    text, end = m.claude_code_turns(p)
+    assert text == "USER: add a retry\n\nASSISTANT: done" and end == p.stat().st_size
+
+
 def test_ingest_transcript_stores_cursor(m, tmp_path, monkeypatch):
     p = tmp_path / "t.jsonl"
     transcript(p, [("user", "set maxconn"), ("assistant", "done")])
@@ -609,6 +621,13 @@ def test_learn_repo_reads_commits_and_docs_incrementally(m, tmp_path, monkeypatc
         before = len(calls)
         m.learn_repo(c, repo)
         assert "changed" in calls[before] and "CLAUDE.md" not in calls[before]
+
+
+def test_learn_repo_refuses_a_folder_that_does_not_exist(m, tmp_path):
+    """A mistyped --repo used to exit 0 having read nothing, which passes for success. It fails before the lock."""
+    with pytest.raises(SystemExit, match=r"no such folder: .*typo"):
+        m.cmd_learn(types.SimpleNamespace(repo=[str(tmp_path / "typo")]))
+    assert not m.LOCK.exists()
 
 
 def test_learn_repo_on_a_plain_folder_still_reads_docs(m, tmp_path, monkeypatch):

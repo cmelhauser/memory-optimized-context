@@ -15,7 +15,7 @@ start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.1.0`. 77 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.1.0`. 79 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. Not yet run against a real store.
@@ -178,6 +178,10 @@ database, so it is safe to run daily; a second run over an unchanged source make
 | claude.ai export (web, Desktop, mobile, Cowork) | `--export FILE` | `conversations.json`, both message shapes | `updated_at` per conversation |
 | All of the above | `--all [--repos ~/GitHub] [--notes DIR] [--exports ~/memory/exports]` | transcripts, every git repo under `--repos`, notes, every `*.json` under `--exports` | as above |
 
+Cursor runs the hooks in `~/.claude/settings.json` too. Its agent transcripts mark a turn with
+`role` where Claude Code writes `type`, and the reader takes either, so a Cursor session's Stop
+hook learns from it. `learn --transcripts` backfills Claude Code's transcripts only.
+
 Lines already in the form `[project] fact` (bulleted or not) in any doc or note are ingested
 directly with no LLM call. Everything else goes through the Reflector in windows of about 30k
 characters, one Haiku call per window. A repository with a thousand commits costs roughly ten
@@ -239,7 +243,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       77 tests, six-process concurrency test included
+tests/test_memory.py       79 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
