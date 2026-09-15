@@ -15,6 +15,7 @@ proves each closure is named.
 | Same lesson from N parallel subagents | identical ids collapse; count is the vote | `test_parallel_hook_processes_do_not_lose_updates` |
 | Reflector's `claude -p` re-triggers the Stop hook | `MEMORY_REFLECT=1` on the child; hooks exit on it | `test_cmd_hook_is_inert_inside_reflection`, `test_llm_cli_success_and_recursion_guard` |
 | Same transcript reflected twice | byte-offset cursor in `sources`, moved window by window | `test_ingest_transcript_stores_cursor`, `test_backfill_stops_at_a_failed_window_and_the_next_run_resumes_there` |
+| A session outruns its stops while the lock is busy | the next stop reads from the cursor, oldest first, at most two windows, and moves the cursor only past them | `test_backfill_reads_every_window_and_a_hook_two_oldest_first` |
 | A Reflector call fails part-way through a source | no cursor moves past unanswered text; the run stops, keeps and compiles what it did | `test_learn_stops_on_a_failed_reflector_keeps_its_progress_and_resumes`, `test_commit_cursor_after_a_failure_is_the_last_reflected_commit` |
 | Same export ingested twice | `updated_at` cursor per conversation | `test_export_ingest_is_idempotent_per_updated_at` |
 | Drive conflict copies | `compiled/` written only locally; `journal/claude-ai/` written only by claude.ai | by construction; no file has two writers |

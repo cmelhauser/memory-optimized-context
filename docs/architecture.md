@@ -29,7 +29,8 @@ way.
    the Stop hook derives; a Claude Code worktree counts as its repository.
 1. **Capture.** A Claude Code `Stop` or `SubagentStop` hook writes the hook JSON to a temp file,
    forks `memory hook`, and returns. `memory hook` journals any `LESSONS:` block from the last
-   assistant message, then hands the transcript tail to the Reflector.
+   assistant message, then hands the transcript's new turns to the Reflector: at most two ~30k
+   windows, oldest first, so a session that outran its stops is caught up, not skipped.
 2. **Reflect.** Claude Haiku reads the transcript since the last byte offset and returns a JSON
    array of `{project, text}` lessons. The offset is stored so the next stop reflects only what
    is new. The same Reflector runs over claude.ai `conversations.json` exports, keyed by

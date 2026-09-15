@@ -24,7 +24,7 @@ both installs end to end against a fake Reflector. Not yet run against a real st
 
 | Capability | How |
 |---|---|
-| Capture without the `LESSONS:` instruction | Stop hook passes the Claude Code transcript path; a Reflector (Claude Haiku via `claude -p` or SDK) extracts durable lessons from the session tail. Incremental by byte offset. |
+| Capture without the `LESSONS:` instruction | Stop hook passes the Claude Code transcript path; a Reflector (Claude Haiku via `claude -p` or SDK) extracts durable lessons from the turns since the last stop, oldest first. Incremental by byte offset. |
 | Capture from Desktop, web, mobile, Cowork | `memory ingest --export conversations.json` (claude.ai → Settings → Privacy → Export data). Same Reflector. Idempotent per conversation `updated_at`. Claude Desktop also gets live `remember`/`recall` via the MCP server. |
 | Semantic recall | `MEMORY_EMBED=voyage` (or `openai`). Hybrid FTS5 + cosine, fused with RRF. Off by default; keyword search alone works. numpy in the image makes ranking 5,000 lessons a ~20 ms matmul; the stdlib fallback is ~300 ms. |
 | Learn from history | `memory learn --all`: Claude Code transcripts, git commit messages and docs of every repo, notes, claude.ai exports. Incremental by cursor. |
@@ -276,7 +276,7 @@ matching the tree.
 
 ## Costs
 
-One Haiku call per session stop (transcript tail ≤ 30k chars) plus one per new lesson for the contradiction check. Typical day: a few cents on the API, or a negligible slice of a subscription via `claude -p`. Embeddings, if enabled: one call per new lesson.
+One Haiku call per session stop (the ≤ 30k chars of new transcript; two at most, when earlier stops found the lock busy) plus one per new lesson for the contradiction check. Typical day: a few cents on the API, or a negligible slice of a subscription via `claude -p`. Embeddings, if enabled: one call per new lesson.
 
 The first `learn --all` is the expensive run: one call per ~30k window of every transcript, commit
 log and doc set, which for months of history is hundreds of calls. On a subscription that can

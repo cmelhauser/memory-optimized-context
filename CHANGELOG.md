@@ -79,6 +79,10 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A Stop hook that got the lock after earlier stops had given up reflected only the last 30k
+  characters of everything since, then moved the cursor to the end, so the middle of a busy
+  session was never learned. It now reads from its cursor, oldest first, at most two windows
+  per stop, and moves the cursor only past them.
 - A ticked Markdown checkbox (`- [x] done`) in a doc or note was read as a lesson tagged for
   project `x`, so release checklists filed their items under `x`. A task-list item is now
   prose. `test_a_ticked_checkbox_is_not_a_project_tag`.
@@ -99,8 +103,8 @@ until the system has run against a real store for at least a month.
   worktree counts as its repository. `test_learn_transcripts_backfills_claude_code_dirs`,
   `test_hook_files_a_worktree_session_under_its_repository`.
 - `learn --transcripts` reflected only the last 30k characters of each transcript, about 6 per
-  cent of one real history. A backfill now reflects every ~30k window; the Stop hook
-  keeps its one-call tail. `test_backfill_reflects_every_window_but_the_hook_only_the_tail`.
+  cent of one real history. A backfill now reflects every ~30k window.
+  `test_backfill_reads_every_window_and_a_hook_two_oldest_first`.
 - `reflect_batches` budgeted the text but not the `### name` headers or the label, so the
   Reflector's 30k tail cut dropped the head of any window made of many short commits.
   `test_reflect_batches_never_cut_the_head_of_a_window`.

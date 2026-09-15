@@ -380,22 +380,27 @@ def turn_windows(turns, start, size):
         done = end
     return out + ([(buf, done)] if buf else [])
 
+HOOK_WINDOWS = 2   # a Stop hook reflects at most this many windows, oldest first; the rest waits for the next stop
+
 def ingest_transcript(c, path, project, backfill=False):
-    """Reflect a transcript from its cursor. A Stop hook sends the tail (a stop follows every turn). A backfill sends
-    every window, so a long history is read whole, and moves the cursor window by window, so a ReflectorFailed
-    part-way costs none of the windows already reflected."""
+    """Reflect a transcript from its cursor, window by window, moving the cursor after each, so a ReflectorFailed
+    part-way costs none of the windows already reflected. A backfill reads every window. A Stop hook reads at most
+    HOOK_WINDOWS, oldest first: a stop follows every turn, so that is usually one call, and a session whose earlier
+    stops could not get the lock is caught up by its next stops or a backfill, never skipped. A turn cut across
+    windows is read to its last piece, the only one that moves the cursor past it."""
     key = f"transcript:{path}"
     start = int(cursor(c, key) or 0)
     turns, end = transcript_turns(path, start)
-    if not backfill:
-        new = [upsert(c, p, t) for p, t in reflect("\n\n".join(t for t, _ in turns), project, known_projects(c))]
-    else:
-        new = []
-        with carrying(new):
-            for text, done in turn_windows(turns, start, CFG["transcript_chars"]):
-                new += [upsert(c, p, t) for p, t in reflect(text, project, known_projects(c))]
-                set_cursor(c, key, str(done))
-    set_cursor(c, key, str(end))
+    windows = turn_windows(turns, start, CFG["transcript_chars"])
+    n = len(windows) if backfill else HOOK_WINDOWS
+    while n < len(windows) and windows[n - 1][1] == (windows[n - 2][1] if n > 1 else start):
+        n += 1   # stopping inside a cut turn would never move the cursor, and would send its pieces again
+    new = []
+    with carrying(new):
+        for text, done in windows[:n]:
+            new += [upsert(c, p, t) for p, t in reflect(text, project, known_projects(c))]
+            set_cursor(c, key, str(done))
+    if n >= len(windows): set_cursor(c, key, str(end))
     return new
 
 def export_msg_text(m):
@@ -627,7 +632,7 @@ def cmd_hook(a):
         tp = j.get("transcript_path")
         if tp and Path(tp).exists() and CFG["llm"] != "none":
             try: new += ingest_transcript(c, tp, project)
-            except ReflectorFailed as e: log(f"hook {a.role}: {e}; the transcript is left for the next stop")
+            except ReflectorFailed as e: new += e.new; log(f"hook {a.role}: {e}; the rest of the transcript waits for the next stop")
         post_ingest(c, new); c.commit()
         n, p = compile_(c); c.commit()
     log(f"hook {a.role}: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned")

@@ -57,6 +57,9 @@ before editing either.
   be one compile behind when a session starts.
 - A Reflector answer with no JSON array in it counts as "no lessons", not as a failure, so one
   odd answer cannot stall a backfill.
+- A Stop hook reads at most two windows of new transcript. A session that outran its stops while
+  the lock was busy is caught up by its next stops or by `learn --transcripts`; its cursor never
+  moves past what was read.
 
 ## Synchronisation rule
 

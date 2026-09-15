@@ -724,15 +724,17 @@ def test_hook_files_a_worktree_session_under_its_repository(m, tmp_path, monkeyp
     assert m.project_of("/home/me/GitHub/doc-ingestion/.claude/worktrees/x/src") == "doc-ingestion"
 
 
-def test_backfill_reflects_every_window_but_the_hook_only_the_tail(m, tmp_path, monkeypatch):
-    """learn --transcripts reads a long session whole, in windows; the Stop hook keeps its one-call tail."""
+def test_backfill_reads_every_window_and_a_hook_two_oldest_first(m, tmp_path, monkeypatch):
+    """learn --transcripts reads a long session whole, in windows. A Stop hook reads at most two windows from its
+    cursor, oldest first, and moves the cursor only past them, so a session that outran its stops while the lock
+    was busy is caught up by the next stops, never skipped."""
     monkeypatch.setattr(m, "CFG", dict(m.CFG, transcript_chars=200))
     turns = [("user" if i % 2 == 0 else "assistant", f"marker{i:03d} " + "x" * 40) for i in range(40)]
     turns.append(("user", "y" * 450))                   # one turn longer than a window: cut, not dropped
     d = tmp_path / "projects" / "-home-me-GitHub-p"
     d.mkdir(parents=True)
     transcript(d / "s.jsonl", turns, cwd="/home/me/GitHub/p")
-    shutil.copy(d / "s.jsonl", tmp_path / "tail.jsonl")
+    shutil.copy(d / "s.jsonl", tmp_path / "hook.jsonl")
     calls = []
     monkeypatch.setattr(m, "llm", tracing_llm(calls))
     with m.db() as c:
@@ -741,8 +743,17 @@ def test_backfill_reflects_every_window_but_the_hook_only_the_tail(m, tmp_path, 
         assert all(f"marker{i:03d}" in sent for i in range(40)) and sent.count("y") == 450
         assert len(calls) >= 12
         calls.clear()
-        m.ingest_transcript(c, tmp_path / "tail.jsonl", "p")
-    assert len(calls) == 1 and "marker000" not in calls[0]
+        hook, key = tmp_path / "hook.jsonl", f"transcript:{tmp_path / 'hook.jsonl'}"
+        m.ingest_transcript(c, hook, "p")
+        assert len(calls) == 2 and "marker000" in calls[0]             # oldest first, two windows
+        assert 0 < int(m.cursor(c, key)) < hook.stat().st_size         # only past what was read
+        for _ in range(30):                                            # the next stops catch up
+            if int(m.cursor(c, key)) == hook.stat().st_size:
+                break
+            m.ingest_transcript(c, hook, "p")
+        assert int(m.cursor(c, key)) == hook.stat().st_size
+    sent = [p.split("<conversation>\n", 1)[1] for p in calls]
+    assert all(sum(f"marker{i:03d}" in s for s in sent) == 1 for i in range(40)) and "".join(sent).count("y") == 450
 
 
 def test_reflect_batches_never_cut_the_head_of_a_window(m, monkeypatch):
