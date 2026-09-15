@@ -15,7 +15,7 @@ start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.1.0`. 80 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.1.0`. 81 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. Not yet run against a real store.
@@ -193,6 +193,10 @@ stops, keeps and compiles what it has, and exits non-zero with a message. No cur
 text that went unanswered, so running it again later resumes where it stopped and sends nothing
 twice.
 
+`--max-calls N` caps one run at about N Reflector calls: each reflection counts one, plus one for
+each lesson it returns, for the contradiction check it will need. The run stops the same way, so a
+first backfill can be spread out, for example `learn --transcripts --max-calls 60` every few hours.
+
 ```bash
 python3 bin/memory learn --all                           # native
 docker exec memory python3 /app/memory learn --all       # Docker
@@ -243,7 +247,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       80 tests, six-process concurrency test included
+tests/test_memory.py       81 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
@@ -277,4 +281,4 @@ One Haiku call per session stop (transcript tail ≤ 30k chars) plus one per new
 The first `learn --all` is the expensive run: one call per ~30k window of every transcript, commit
 log and doc set, which for months of history is hundreds of calls. On a subscription that can
 reach a usage limit; a run that meets one stops and resumes on the next, so it can simply be run
-again later, or taken a source at a time (`--repo`, `--transcripts`).
+again later, taken a source at a time (`--repo`, `--transcripts`), or spread out with `--max-calls`.

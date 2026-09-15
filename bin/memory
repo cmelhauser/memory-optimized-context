@@ -271,9 +271,14 @@ def stopping(new):
     except ReflectorFailed as e:
         new += e.new; failed.append(e)
 
+BUDGET = {"max": None, "used": 0}   # `learn --max-calls`: a reflection costs 1, plus 1 per lesson for its contradiction check
+
 def reflect(text, default_project, known_projects):
-    """Lessons in text. [] when there is nothing to read or MEMORY_LLM=none; ReflectorFailed when no answer came."""
+    """Lessons in text. [] when there is nothing to read or MEMORY_LLM=none; ReflectorFailed when no answer came, or
+    when a `learn --max-calls` budget is spent."""
     if not text.strip(): return []
+    if BUDGET["max"] is not None and BUDGET["used"] >= BUDGET["max"]:
+        raise ReflectorFailed(f"its --max-calls budget of {BUDGET['max']} is spent")
     out = llm(f"Known project slugs: {', '.join(sorted(known_projects | {default_project, 'all'}))}\n"
               f"Default project for this conversation: {default_project}\n\n<conversation>\n{text[-CFG['transcript_chars']:]}\n</conversation>",
               REFLECT_SYS)
@@ -281,7 +286,9 @@ def reflect(text, default_project, known_projects):
         if CFG["llm"] == "none": return []
         raise ReflectorFailed("the Reflector gave no answer; the log line above says why")
     items = parse_json(out) or []
-    return [(str(i.get("project") or default_project), str(i["text"])) for i in items if isinstance(i, dict) and i.get("text")]
+    found = [(str(i.get("project") or default_project), str(i["text"])) for i in items if isinstance(i, dict) and i.get("text")]
+    BUDGET["used"] += 1 + len(found)
+    return found
 
 def known_projects(c):
     return {r[0] for r in c.execute("SELECT DISTINCT project FROM lessons")}
@@ -643,6 +650,7 @@ def cmd_learn(a):
     ReflectorFailed it stops, keeps and compiles what was read, and exits non-zero; the next run resumes there."""
     missing = [r for r in a.repo or [] if not Path(r).expanduser().is_dir()]
     if missing: sys.exit(f"memory: learn --repo: no such folder: {', '.join(missing)}")   # a typo must not pass for success
+    BUDGET.update(max=a.max_calls, used=0)
     with Lock(), db() as c:
         new = ingest_journal(c)
         with stopping(new) as failed:
@@ -738,6 +746,7 @@ def main():
     s.add_argument("--transcripts", action="store_true", help="backfill every Claude Code transcript under ~/.claude/projects")
     s.add_argument("--export", action="append", help="claude.ai conversations.json")
     s.add_argument("--exports", help="folder of exports for --all (default $MEMORY_ROOT/exports)")
+    s.add_argument("--max-calls", type=int, help="stop after about N Reflector calls, contradiction checks included; the next run carries on")
     s.set_defaults(f=cmd_learn)
     s = sp.add_parser("compile"); s.set_defaults(f=cmd_compile)
     s = sp.add_parser("search"); s.add_argument("query"); s.add_argument("--project"); s.add_argument("-k", type=int, default=8)

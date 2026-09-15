@@ -637,6 +637,27 @@ def test_learn_repo_refuses_a_folder_that_does_not_exist(m, tmp_path):
     assert not m.LOCK.exists()
 
 
+def test_learn_max_calls_stops_cleanly_and_the_next_run_carries_on(m, tmp_path, monkeypatch):
+    """--max-calls spreads a long backfill out. A reflection costs one call, plus one per lesson it returns for the
+    contradiction check to come; once the budget is spent the run stops like a usage limit, and the next carries on."""
+    repo = git_repo(tmp_path / "alpha", "alpha")
+    calls = []
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    monkeypatch.setattr(sys, "argv", ["memory", "learn", "--repo", str(repo), "--max-calls", "1"])
+    with pytest.raises(SystemExit, match="its --max-calls budget of 1 is spent"):
+        m.main()
+    assert [p for p in calls if "<conversation>" in p and "[git history of alpha]" in p]
+    assert not [p for p in calls if "[documentation of alpha]" in p]
+    monkeypatch.setattr(sys, "argv", ["memory", "learn", "--repo", str(repo)])
+    m.main()
+    reflections = [p for p in calls if "<conversation>" in p]
+    assert sum("[git history of alpha]" in p for p in reflections) == 1
+    assert sum("[documentation of alpha]" in p for p in reflections) == 1
+    with m.db() as c:
+        texts = {r["text"] for r in c.execute("SELECT text FROM lessons")}
+    assert {"never use --force", "lesson from git history of alpha", "lesson from documentation of alpha"} <= texts
+
+
 def test_learn_repo_on_a_plain_folder_still_reads_docs(m, tmp_path, monkeypatch):
     d = tmp_path / "plain"
     d.mkdir()

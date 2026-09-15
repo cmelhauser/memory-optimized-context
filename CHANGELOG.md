@@ -9,6 +9,9 @@ until the system has run against a real store for at least a month.
 
 ### Added
 
+- `learn --max-calls N`: a run stops after about N Reflector calls, each reflection counting one
+  plus one per lesson it returns, and keeps its place like a usage-limit stop, so a first backfill
+  can be spread over days. `test_learn_max_calls_stops_cleanly_and_the_next_run_carries_on`.
 - `memory learn`: incremental adapters for git repositories (commit messages since the last
   seen hash, docs by content hash), note folders, a backfill of every Claude Code transcript
   under `~/.claude/projects`, and claude.ai exports in both message shapes; `--all` runs every
