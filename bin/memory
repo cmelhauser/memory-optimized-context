@@ -416,11 +416,15 @@ def ingest_export(c, path):
 DOC_GLOBS = ("README*", "CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md", "CHANGELOG.md", "HANDOFF.md", "docs/**/*.md", "*.md")
 DOC_MAX_CHARS = 20000
 
+TASK_ITEM = re.compile(r"[-*+]\s+\[[ xX]\]\s")   # `- [x] done` is a Markdown checklist, not a `[project]` tag
+
 def split_tagged(text):
-    """Lines of the form `[proj] fact` (optionally as a `- ` bullet) are lessons already; return them and the remaining prose."""
+    """Lines of the form `[proj] fact` (optionally as a `- ` bullet) are lessons already; return them and the remaining prose.
+    A Markdown task-list item (`- [x] done`, `- [ ] todo`) is prose."""
     tagged, rest = [], []
     for line in text.splitlines():
-        m = LESSON_RE.match(line.strip().lstrip("-* ").strip())
+        s = line.strip()
+        m = None if TASK_ITEM.match(s) else LESSON_RE.match(s.lstrip("-* ").strip())
         if m: tagged.append((m.group(1), m.group(2)))
         else: rest.append(line)
     return tagged, ("\n".join(rest).strip() if any(line.strip() for line in rest) else "")

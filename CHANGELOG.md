@@ -76,6 +76,9 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A ticked Markdown checkbox (`- [x] done`) in a doc or note was read as a lesson tagged for
+  project `x`, so release checklists filed their items under `x`. A task-list item is now
+  prose. `test_a_ticked_checkbox_is_not_a_project_tag`.
 - `learn --repo` on a folder that does not exist exited 0 having read nothing, so a typo passed
   for success. It now fails with `no such folder` before taking the lock.
   `test_learn_repo_refuses_a_folder_that_does_not_exist`.

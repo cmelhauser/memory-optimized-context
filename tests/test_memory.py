@@ -598,6 +598,13 @@ def test_split_tagged_separates_lessons_from_prose(m):
     assert m.split_tagged("[p] only\n") == ([("p", "only")], "")
 
 
+def test_a_ticked_checkbox_is_not_a_project_tag(m):
+    """A release checklist's `- [x] done` once filed its items under a project called `x`."""
+    tagged, rest = m.split_tagged("- [x] shipped the release\n* [X] tagged it\n- [ ] still to do\n- [all] a real lesson\n")
+    assert tagged == [("all", "a real lesson")]
+    assert rest == "- [x] shipped the release\n* [X] tagged it\n- [ ] still to do"
+
+
 def test_learn_repo_reads_commits_and_docs_incrementally(m, tmp_path, monkeypatch):
     repo = git_repo(tmp_path / "alpha", "alpha")
     calls = []
