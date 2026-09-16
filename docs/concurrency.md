@@ -14,6 +14,7 @@ proves each closure is named.
 | Claude Code is still writing a transcript's last line | a line with no newline is left for the next read | `test_a_half_written_last_line_is_left_for_the_next_read` |
 | Same lesson from N parallel subagents | identical ids collapse; count is the vote | `test_parallel_hook_processes_do_not_lose_updates` |
 | Reflector's `claude -p` re-triggers the Stop hook | `MEMORY_REFLECT=1` on the child; hooks exit on it | `test_cmd_hook_is_inert_inside_reflection`, `test_llm_cli_success_and_recursion_guard` |
+| The Reflector's `claude -p` sessions are read back as transcripts | `--no-session-persistence` on the call; a backfill skips a transcript whose first user turn is the Reflector's instructions | `test_llm_cli_success_and_recursion_guard`, `test_backfill_skips_transcripts_the_reflector_left_behind` |
 | Same transcript reflected twice | byte-offset cursor in `sources`, moved window by window | `test_ingest_transcript_stores_cursor`, `test_backfill_stops_at_a_failed_window_and_the_next_run_resumes_there` |
 | A session outruns its stops while the lock is busy | the next stop reads from the cursor, oldest first, at most two windows, and moves the cursor only past them | `test_backfill_reads_every_window_and_a_hook_two_oldest_first` |
 | A Reflector call fails part-way through a source | no cursor moves past unanswered text; the run stops, keeps and compiles what it did | `test_learn_stops_on_a_failed_reflector_keeps_its_progress_and_resumes`, `test_commit_cursor_after_a_failure_is_the_last_reflected_commit` |

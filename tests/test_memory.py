@@ -280,12 +280,33 @@ def test_llm_cli_failure_is_handled(tmp_path, monkeypatch):
 def test_llm_cli_success_and_recursion_guard(tmp_path, monkeypatch):
     fake = tmp_path / "fakebin"
     fake.mkdir()
-    (fake / "claude").write_text('#!/bin/sh\n[ "$MEMORY_REFLECT" = 1 ] || exit 3\necho ok\n')
+    (fake / "claude").write_text('#!/bin/sh\n[ "$MEMORY_REFLECT" = 1 ] || exit 3\n'
+                                 'case " $* " in *" --no-session-persistence "*) ;; *) exit 4 ;; esac\necho ok\n')
     (fake / "claude").chmod(0o755)
     monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     m = load(tmp_path / "r", monkeypatch, MEMORY_LLM="cli")
     assert m.llm("x").strip() == "ok"
+
+
+def test_backfill_skips_transcripts_the_reflector_left_behind(m, tmp_path, monkeypatch):
+    """Every `claude -p` call used to leave a transcript whose first user turn is the Reflector's instructions and a
+    window of another transcript. A backfill reads only real sessions, and skips a folder holding none."""
+    root = tmp_path / "projects"
+    real = root / "-home-me-GitHub-p"
+    real.mkdir(parents=True)
+    transcript(real / "s.jsonl", [("user", "pin the image tag"), ("assistant", "done")], cwd="/home/me/GitHub/p")
+    transcript(real / "r.jsonl", [("user", m.REFLECT_SYS + "\n\nUSER: pin the image tag"), ("assistant", "[]")], cwd="/tmp/tmpa")
+    left = root / "-private-var-folders-x-T-tmpb"
+    left.mkdir()
+    transcript(left / "c.jsonl", [("user", m.CONTRA_SYS + "\n\nNEW: x"), ("assistant", "{}")], cwd="/private/var/folders/x/T/tmpb")
+    calls = []
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    with m.db() as c:
+        m.learn_transcripts(c, root)
+        keys = {r[0] for r in c.execute("SELECT key FROM sources")}
+    assert len(calls) == 1 and "pin the image tag" in calls[0] and "durable, reusable lessons" not in calls[0]
+    assert keys == {f"transcript:{real / 's.jsonl'}"}
 
 
 def test_contradiction_supersedes_older_and_keeps_it_searchable(m, monkeypatch):

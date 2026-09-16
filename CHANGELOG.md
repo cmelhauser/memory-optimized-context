@@ -79,6 +79,11 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- Every Reflector call through `claude -p` saved a Claude Code session, so a backfill found
+  thousands of transcripts of its own prompts and would have reflected their windows again, and
+  each run made more. The call now passes `--no-session-persistence`, and `learn --transcripts`
+  skips a transcript whose first user turn is the Reflector's instructions.
+  `test_backfill_skips_transcripts_the_reflector_left_behind`.
 - A Stop hook that got the lock after earlier stops had given up reflected only the last 30k
   characters of everything since, then moved the cursor to the end, so the middle of a busy
   session was never learned. It now reads from its cursor, oldest first, at most two windows

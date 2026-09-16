@@ -147,7 +147,7 @@ def llm(prompt, system="You are a precise assistant. Output only what is asked."
         env = {**os.environ, "MEMORY_REFLECT": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}  # hooks check MEMORY_REFLECT and exit
         try:
             with tempfile.TemporaryDirectory() as d:  # empty cwd → no CLAUDE.md, no project memory loaded
-                r = subprocess.run(["claude", "-p", "--model", CFG["model"], "--output-format", "json"],
+                r = subprocess.run(["claude", "-p", "--model", CFG["model"], "--output-format", "json", "--no-session-persistence"],
                                    input=f"{system}\n\n{prompt}", capture_output=True, text=True, env=env, cwd=d, timeout=180, check=False)
         except subprocess.TimeoutExpired:
             log("claude -p timed out"); return None
@@ -350,15 +350,28 @@ def transcript_turns(path, start=0):
         for raw in f:
             if not raw.endswith(b"\n"): break
             pos += len(raw)
-            try: j = json.loads(raw)
-            except json.JSONDecodeError: continue
-            kind = (j.get("type") or j.get("role")) if isinstance(j, dict) else None   # Claude Code: type; Cursor: role
-            if kind not in ("user", "assistant"): continue
-            content = j.get("message", {}).get("content", "")
-            if isinstance(content, list):
-                content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
-            if content.strip(): out.append((f"{kind.upper()}: {content.strip()}", pos))
+            turn = line_turn(raw)
+            if turn: out.append((turn, pos))
     return out, pos
+
+def line_turn(raw):
+    """One transcript line → "USER: text" or "ASSISTANT: text"; None for anything else. Claude Code marks a turn with
+    `type`, Cursor with `role`."""
+    try: j = json.loads(raw)
+    except json.JSONDecodeError: return None
+    kind = (j.get("type") or j.get("role")) if isinstance(j, dict) else None
+    if kind not in ("user", "assistant"): return None
+    content = j.get("message", {}).get("content", "")
+    if isinstance(content, list):
+        content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    return f"{kind.upper()}: {content.strip()}" if content.strip() else None
+
+def reflector_transcript(path):
+    """A transcript the Reflector's own `claude -p` call left behind, before it passed --no-session-persistence: its
+    first user turn is the Reflector's instructions. Reading one would reflect a window of another transcript again."""
+    with open(path, "rb") as f:
+        first = next((t for t in map(line_turn, f) if t and t.startswith("USER: ")), "")
+    return first[len("USER: "):].startswith((REFLECT_SYS[:40], CONTRA_SYS[:40]))
 
 def claude_code_turns(path, start=0):
     """Claude Code JSONL transcript → (text, end_offset). Incremental from byte offset."""
@@ -558,7 +571,9 @@ def claude_code_project_dirs(root=None):
     A folder without one has no turns to reflect; its last '-' segment stands in."""
     root = Path(root or Path.home() / ".claude" / "projects")
     for d in sorted(root.glob("*/")):
-        files = sorted(d.glob("*.jsonl")); cwd = transcript_cwd(files)
+        found = sorted(d.glob("*.jsonl")); files = [f for f in found if not reflector_transcript(f)]
+        if found and not files: continue   # a folder holding only the Reflector's own sessions
+        cwd = transcript_cwd(files)
         yield (project_of(cwd) if cwd else d.name.rstrip("-").rsplit("-", 1)[-1].lower() or "all"), files
 
 def learn_transcripts(c, root=None):
