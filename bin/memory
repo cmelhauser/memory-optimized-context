@@ -45,6 +45,13 @@ CFG = {
 def NOW():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 LESSON_RE = re.compile(r"^\[([a-z0-9][a-z0-9._-]*)\]\s+(.+?)\s*$", re.I)
+PROJECT_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")   # a slug is a name: `compile_` makes it a filename, so never a path
+
+def as_project(value, default):
+    """A slug the store and the filesystem both accept, or `default`. The Reflector chooses the slug from text that
+    reached a session, so `../` and friends must not survive the trip to `compiled/projects/<slug>.md`."""
+    v = str(value).strip().lower()
+    return v if PROJECT_RE.fullmatch(v) else default
 
 
 def log(*a):
@@ -163,10 +170,14 @@ def llm(prompt, system="You are a precise assistant. Output only what is asked."
     return None
 
 def parse_json(text):
+    """The first JSON array or object in the text that parses. An answer that opens with a sentence of its own, brackets
+    and all, still yields its array: first-`[`-to-last-`]` would slice from the prose and parse as nothing."""
     if not text: return None
-    m = re.search(r"\[.*\]|\{.*\}", text, re.S)
-    try: return json.loads(m.group(0)) if m else None
-    except json.JSONDecodeError: return None
+    dec = json.JSONDecoder()
+    for m in re.finditer(r"[\[{]", text):
+        try: return dec.raw_decode(text, m.start())[0]
+        except json.JSONDecodeError: continue
+    return None
 
 
 # ---------------------------------------------------------------- embeddings (optional)
@@ -286,7 +297,7 @@ def reflect(text, default_project, known_projects):
         if CFG["llm"] == "none": return []
         raise ReflectorFailed("the Reflector gave no answer; the log line above says why")
     items = parse_json(out) or []
-    found = [(str(i.get("project") or default_project), str(i["text"])) for i in items if isinstance(i, dict) and i.get("text")]
+    found = [(as_project(i.get("project") or default_project, default_project), str(i["text"])) for i in items if isinstance(i, dict) and i.get("text")]
     BUDGET["used"] += 1 + len(found)
     return found
 
@@ -303,7 +314,8 @@ def reconcile(c, new_id):
     r = c.execute("SELECT * FROM lessons WHERE id=?", (new_id,)).fetchone()
     cands = [x for x in search(c, r["text"], r["project"], k=6) if x["id"] != new_id]
     if not cands: return
-    out = parse_json(llm(f"NEW: {r['text']}\nCANDIDATES:\n" + "\n".join(f"{x['id']}: {x['text']}" for x in cands), CONTRA_SYS, 300)) or {}
+    out = parse_json(llm(f"NEW: {r['text']}\nCANDIDATES:\n" + "\n".join(f"{x['id']}: {x['text']}" for x in cands), CONTRA_SYS, 300))
+    if not isinstance(out, dict): out = {}   # an answer shaped as an array is no verdict, not a crash mid-run
     for sid in out.get("same", []):
         if any(x["id"] == sid for x in cands):  # merge: fold votes into the older, retire the new
             c.execute("UPDATE lessons SET votes=votes+?, last_seen=? WHERE id=?", (r["votes"], NOW(), sid))
@@ -361,9 +373,12 @@ def line_turn(raw):
     except json.JSONDecodeError: return None
     kind = (j.get("type") or j.get("role")) if isinstance(j, dict) else None
     if kind not in ("user", "assistant"): return None
-    content = j.get("message", {}).get("content", "")
+    msg = j.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
     if isinstance(content, list):
-        content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+        content = "\n".join(b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str))
+    elif not isinstance(content, str):
+        return None     # null, missing, or a shape this version does not know: not a turn, and never an exception
     return f"{kind.upper()}: {content.strip()}" if content.strip() else None
 
 def reflector_transcript(path):
@@ -417,9 +432,11 @@ def ingest_transcript(c, path, project, backfill=False):
     return new
 
 def export_msg_text(m):
-    """claude.ai export messages carry `text`, or `content: [{type: text, text}]` in newer exports."""
-    if m.get("text"): return m["text"]
-    return "\n".join(b.get("text", "") for b in m.get("content", []) if isinstance(b, dict) and b.get("type") == "text").strip()
+    """claude.ai export messages carry `text`, or `content: [{type: text, text}]` in newer exports. A null or unknown
+    shape is empty text, not an exception: one odd message must not roll back the whole export."""
+    if isinstance(m.get("text"), str) and m["text"]: return m["text"]
+    blocks = m.get("content") if isinstance(m.get("content"), list) else []
+    return "\n".join(b["text"] for b in blocks if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)).strip()
 
 def ingest_export(c, path):
     """claude.ai data export (conversations.json). Covers web, Desktop, mobile, Cowork chats."""
@@ -620,7 +637,9 @@ def compile_(c):
     def fmt(r): return f"- ({r['votes']}) {r['text']}"
     atomic_write(COMPILED / "PLAYBOOK.md", "\n".join(fmt(r) for r in by.get("all", [])[:CFG["max_lines"]]) + "\n")
     for proj, rs in by.items():
-        if proj != "all": atomic_write(COMPILED / "projects" / f"{proj}.md", "\n".join(fmt(r) for r in rs[:CFG["max_lines"]]) + "\n")
+        if proj == "all": continue
+        if as_project(proj, "") != proj: log(f"skipping project {proj!r}: not a slug"); continue   # a store written before as_project
+        atomic_write(COMPILED / "projects" / f"{proj}.md", "\n".join(fmt(r) for r in rs[:CFG["max_lines"]]) + "\n")
     for p in (COMPILED / "projects").glob("*.md"):   # remove compiled files for projects with no active lessons
         if p.stem not in by: p.unlink()
     if shutil.which("git") and (ROOT / ".git").exists():

@@ -883,6 +883,14 @@ def test_export_message_text_handles_both_shapes(m):
     assert m.export_msg_text({}) == ""
 
 
+def test_an_export_message_of_an_unknown_shape_is_empty_text(m):
+    """An export is written by another program and can carry nulls. One odd message must read as no text: raising
+    here would abort the ingest and roll back every conversation already read."""
+    assert m.export_msg_text({"text": None, "content": None}) == ""
+    assert m.export_msg_text({"content": {"text": "not a list"}}) == ""
+    assert m.export_msg_text({"content": [{"type": "text", "text": None}, {"type": "text", "text": "kept"}]}) == "kept"
+
+
 def test_vector_rank_stdlib_and_numpy_agree(m, monkeypatch):
     rows = [{"id": i, "embedding": m.array("f", v).tobytes()} for i, v in enumerate([[1, 0, 0], [0, 1, 0], [0.9, 0.1, 0]])]
     q = m.array("f", [1, 0, 0]).tobytes()
@@ -1217,6 +1225,60 @@ def test_transcript_cwd_skips_junk_lines_and_files_without_one(m, tmp_path):
     b.write_text('{"type": "user", "cwd": "/home/me/GitHub/p"}\n')
     assert m.transcript_cwd([a]) is None
     assert m.transcript_cwd([a, b]) == "/home/me/GitHub/p"
+
+
+# ------------------------------------------------------------------ untrusted input: slugs, odd lines, odd answers
+
+
+def test_a_project_slug_is_a_name_never_a_path(m, monkeypatch):
+    """The Reflector picks the slug, from text that merely passed through a session, and `compile_` makes it a
+    filename. A slug that is a path would write outside the store, over whatever is already there."""
+    monkeypatch.setattr(m, "llm", lambda *a, **k: json.dumps([{"project": "../../../escaped", "text": "one"},
+                                                              {"project": "GoodSlug", "text": "two"}]))
+    with m.db() as c:
+        assert m.reflect("a conversation", "fallback", set()) == [("fallback", "one"), ("goodslug", "two")]
+        m.upsert(c, "../../../escaped", "filed under a path by an older version")   # a store written before this fix
+        m.upsert(c, "kept", "filed under a name")
+        c.commit()
+        m.compile_(c)
+    assert not list(m.ROOT.parent.glob("*.md"))
+    assert [p.name for p in (m.COMPILED / "projects").glob("*.md")] == ["kept.md"]
+
+
+def test_a_transcript_line_of_an_unknown_shape_is_not_a_turn(m, tmp_path):
+    """Transcripts are written by other programs. A line this version does not understand is no turn at all; an
+    exception here would abort a backfill and roll back every window it had already paid for."""
+    odd = [{"type": "user", "message": None},
+           {"type": "user", "message": "not an object"},
+           {"type": "user", "message": {"content": None}},
+           {"type": "user", "message": {"content": 42}},
+           {"type": "user", "message": {"content": [{"type": "text", "text": None}]}}]
+    assert [m.line_turn(json.dumps(x).encode()) for x in odd] == [None] * len(odd)
+    p = tmp_path / "mixed.jsonl"
+    p.write_text("".join(json.dumps(x) + "\n" for x in [*odd, {"type": "user", "message": {"content": "real turn"}}]))
+    text, end = m.claude_code_turns(p)
+    assert text == "USER: real turn" and end == p.stat().st_size
+
+
+def test_an_answer_that_opens_with_prose_still_yields_its_lessons(m):
+    """first-`[`-to-last-`]` would start the slice inside the sentence and parse as nothing, and the cursor would
+    move on past lessons the Reflector really did return."""
+    assert m.parse_json('Looking at the [conversation] I found:\n[{"project": "p", "text": "a lesson"}]') == \
+        [{"project": "p", "text": "a lesson"}]
+    assert m.parse_json('{"same": ["abc"], "contradicts": []}') == {"same": ["abc"], "contradicts": []}
+    assert m.parse_json("a sentence [with a bracket and no json") is None
+    assert m.parse_json("") is None
+
+
+def test_reconcile_ignores_an_answer_that_is_not_a_verdict(m):
+    """The contradiction check sometimes answers with an array. That is no verdict; it must not end the run."""
+    with m.db() as c:
+        first, _ = m.upsert(c, "proj", "deploy with the blue script")
+        second, _ = m.upsert(c, "proj", "deploy with the green script")
+        c.commit()
+        m.llm = lambda *a, **k: json.dumps([{"id": first, "verdict": "same"}])
+        m.reconcile(c, second)
+        assert [r["state"] for r in c.execute("SELECT state FROM lessons ORDER BY id")] == ["active", "active"]
 
 
 # ------------------------------------------------------------------ the scripts themselves

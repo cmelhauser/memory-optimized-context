@@ -79,6 +79,26 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A lesson's project slug was whatever the Reflector answered, and `compile_` makes a slug a
+  filename, so a slug of `../../../escaped` wrote outside `~/memory` and replaced whatever file
+  it landed on. The slug is chosen from text that merely passed through a session, so the target
+  was too. `as_project` now keeps a slug to `LESSON_RE`'s own shape where the answer is read,
+  and `compile_` skips any slug a store written before this fix may already hold.
+  `test_a_project_slug_is_a_name_never_a_path`.
+- A transcript line whose `message`, `content` or text block was null raised `AttributeError`,
+  and an export message of the same shape raised `TypeError`. A `learn` run is one transaction,
+  so either one discarded every lesson and every cursor the run had earned. Both now read as
+  "not a turn" and "no text", which is what their docstrings always promised.
+  `test_a_transcript_line_of_an_unknown_shape_is_not_a_turn`,
+  `test_an_export_message_of_an_unknown_shape_is_empty_text`.
+- `parse_json` sliced from the first `[` to the last `]`, so an answer that opened with a
+  sentence containing a bracket parsed as nothing: the lessons were dropped and the cursor moved
+  on past them. It now takes the first array or object that parses.
+  `test_an_answer_that_opens_with_prose_still_yields_its_lessons`.
+- A contradiction check that answered with a JSON array instead of an object ended the run with
+  `AttributeError`, rolling it back. An answer that is not a verdict is now no verdict.
+  `test_reconcile_ignores_an_answer_that_is_not_a_verdict`.
+
 - Every Reflector call through `claude -p` saved a Claude Code session, so a backfill found
   thousands of transcripts of its own prompts and would have reflected their windows again, and
   each run made more. The call now passes `--no-session-persistence`, and `learn --transcripts`
