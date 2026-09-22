@@ -466,8 +466,9 @@ def ingest_export(c, path):
             if row and row["cursor"] == upd: continue
             text = "\n\n".join(f"{m.get('sender','').upper()}: {t}" for m in cv.get("chat_messages", []) if (t := export_msg_text(m)))
             slug = re.sub(r"[^a-z0-9]+", "-", (cv.get("name") or "all").lower()).strip("-")[:40] or "all"
-            new += [upsert(c, p, t) for p, t in reflect(text, slug, known_projects(c))]
+            got = [upsert(c, p, t) for p, t in reflect(text, slug, known_projects(c))]
             c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, upd, NOW()))
+            new += checkpoint(c, got)
     return new
 
 
@@ -567,15 +568,16 @@ def learn_repo(c, path, since=None):
             if since and not last: args.append(f"--since={since}")
             commits = [e.strip() for e in git(path, *args).split("\x1e") if e.strip()]   # a body's blank lines stay in its commit
             if commits and head != last:   # one chunk per commit, so a long history is windowed, not truncated
-                new += reflect_batches(c, [(f"commit {e.split()[0]}", e) for e in commits], project, f"git history of {project}",
-                                       done=lambda name: set_cursor(c, key, name.split()[1]))
+                new += checkpoint(c, reflect_batches(c, [(f"commit {e.split()[0]}", e) for e in commits], project,
+                                                     f"git history of {project}",
+                                                     done=lambda name: set_cursor(c, key, name.split()[1])))
             set_cursor(c, key, head)
         files = []
         for g in DOC_GLOBS:   # README.md matches two globs; each file is read once
             files += [f for f in sorted(path.glob(g)) if f not in files and f.is_file() and ".git" not in f.parts and f.stat().st_size <= 2_000_000]
         got, docs, done = take_docs(c, files, lambda f: f"repo:{path}:doc:{f.relative_to(path)}", lambda f: str(f.relative_to(path)))
-        new += got
-        if docs: new += reflect_batches(c, docs, project, f"documentation of {project}", done)
+        new += checkpoint(c, got)
+        if docs: new += checkpoint(c, reflect_batches(c, docs, project, f"documentation of {project}", done))
     return new
 
 def learn_notes(c, folder, project=None):
@@ -584,8 +586,8 @@ def learn_notes(c, folder, project=None):
     with carrying(new):
         files = [f for f in sorted(list(folder.rglob("*.md")) + list(folder.rglob("*.txt"))) if f.is_file()]
         got, prose, done = take_docs(c, files, lambda f: f"notes:{f}", lambda f: str(f.relative_to(folder)))
-        new += got
-        if prose: new += reflect_batches(c, prose, project, f"notes in {folder.name}", done)
+        new += checkpoint(c, got)
+        if prose: new += checkpoint(c, reflect_batches(c, prose, project, f"notes in {folder.name}", done))
     return new
 
 def project_of(cwd):
@@ -623,7 +625,7 @@ def learn_transcripts(c, root=None):
     new = []
     with carrying(new):
         for slug, files in claude_code_project_dirs(root):
-            for f in files: new += ingest_transcript(c, f, slug, backfill=True)
+            for f in files: new += checkpoint(c, ingest_transcript(c, f, slug, backfill=True))
     return new
 
 def learn_all(c, repos_root=None, notes=None, exports=None):
@@ -677,6 +679,14 @@ def post_ingest(c, new):
     embed_missing(c)
     for i, is_new in new:
         if is_new: reconcile(c, i)
+
+def checkpoint(c, got):
+    """Reconcile and commit one source's lessons before reading the next. A `learn` used to be a single transaction,
+    so a crash, a reboot or a Ctrl-C discarded every lesson and every cursor the run had earned, however many hours
+    it had been working. Now an interruption costs the source in hand and nothing else. Returns `got`, to be added
+    to the run's tally."""
+    post_ingest(c, got); c.commit()
+    return got
 
 
 # ---------------------------------------------------------------- commands

@@ -79,6 +79,14 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A `learn` run was a single transaction: every lesson and every cursor it had earned was
+  discarded if anything interrupted it — a crash, a reboot, the machine sleeping, a Ctrl-C. An
+  overnight backfill once held the store for ten hours and saved none of it. Each source is now
+  reconciled and committed as it is finished, so an interruption costs the transcript, repository,
+  note folder or conversation in hand and nothing else.
+  `test_an_interrupted_learn_keeps_the_sources_it_finished`,
+  `test_a_checkpoint_reconciles_before_it_commits`.
+
 - A failed `claude -p` call was logged by the first 300 bytes of its output, which are counters;
   the CLI reports the reason in `result`, at the end. An expired login therefore logged nothing
   that named it, and the twice-daily backfill read "paused" for two days while it learned nothing.

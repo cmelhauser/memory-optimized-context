@@ -1347,6 +1347,45 @@ def test_a_vote_for_a_lesson_that_is_not_there_is_not_ok(m, monkeypatch, capsys)
         assert c.execute("SELECT helpful FROM lessons WHERE id=?", (kept,)).fetchone()[0] == 1
 
 
+# ------------------------------------------------------------------ a run that is interrupted keeps what it read
+
+
+def test_an_interrupted_learn_keeps_the_sources_it_finished(m, tmp_path, monkeypatch):
+    """A `learn` used to be one transaction: a crash, a reboot or a Ctrl-C hours in discarded every lesson and every
+    cursor it had earned. Each source is now committed as it is finished, so only the source in hand is lost."""
+    root = tmp_path / "projects"
+    for enc, cwd in [("-home-me-GitHub-alpha", "/home/me/GitHub/alpha"), ("-home-me-GitHub-beta", "/home/me/GitHub/beta")]:
+        (root / enc).mkdir(parents=True)
+        transcript(root / enc / "s1.jsonl", [("user", "x"), ("assistant", "y")], cwd=cwd)
+
+    real = m.ingest_transcript
+    def die_on_beta(c, path, project, backfill=False):
+        if project == "beta": raise KeyboardInterrupt("the operator pressed Ctrl-C")   # not a ReflectorFailed
+        return real(c, path, project, backfill)
+    monkeypatch.setattr(m, "llm", tracing_llm([]))
+    monkeypatch.setattr(m, "ingest_transcript", die_on_beta)
+
+    with pytest.raises(KeyboardInterrupt), m.db() as c:
+        m.learn_transcripts(c, root)
+
+    with m.db() as c:                                          # a fresh connection: only committed work is visible
+        assert [r[0] for r in c.execute("SELECT DISTINCT project FROM lessons")] == ["alpha"]
+        assert c.execute("SELECT count(*) FROM sources WHERE key LIKE 'transcript:%'").fetchone()[0] == 1
+
+
+def test_a_checkpoint_reconciles_before_it_commits(m, monkeypatch):
+    """Committed lessons must be reconciled lessons: a checkpoint that saved without reconciling would leave
+    duplicates no later run ever revisits."""
+    seen = []
+    monkeypatch.setattr(m, "reconcile", lambda c, i: seen.append(i))
+    with m.db() as c:
+        first, _ = m.upsert(c, "proj", "one lesson")
+        assert m.checkpoint(c, [(first, True), ("old", False)]) == [(first, True), ("old", False)]
+    assert seen == [first]                                     # only the new one, and before the commit
+    with m.db() as c:
+        assert c.execute("SELECT count(*) FROM lessons").fetchone()[0] == 1
+
+
 # ------------------------------------------------------------------ the scripts themselves
 
 

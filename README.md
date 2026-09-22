@@ -15,7 +15,7 @@ start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.1.0`. 91 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.1.0`. 93 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. Not yet run against a real store.
@@ -195,6 +195,9 @@ stops, keeps and compiles what it has, and exits non-zero with a message naming 
 Reflector gave. No cursor moves past text that went unanswered, so running it again later resumes
 where it stopped and sends nothing twice.
 
+Each source is committed as it is finished, so an interruption at any point keeps everything read
+before it; only the source in hand is lost, and its cursor never moved.
+
 The exit status tells a scheduled run what to do next: **0** everything was read, **1** stopped
 part-way with work done, run it again to carry on, **2** the Reflector answered nothing at all,
 so running it again will not help until whatever it reported is fixed. An expired `claude` login
@@ -254,7 +257,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       91 tests, six-process concurrency test included
+tests/test_memory.py       93 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
