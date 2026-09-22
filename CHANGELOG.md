@@ -79,6 +79,23 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A failed `claude -p` call was logged by the first 300 bytes of its output, which are counters;
+  the CLI reports the reason in `result`, at the end. An expired login therefore logged nothing
+  that named it, and the twice-daily backfill read "paused" for two days while it learned nothing.
+  The reason is now extracted, logged, and carried into the message `learn` exits with.
+  `test_a_failed_cli_call_is_reported_by_its_reason_not_its_first_bytes`.
+- `learn` and `ingest` exited 1 whether they had read half their work or none of it, so a run
+  that could not reach the Reflector at all was indistinguishable from a normal `--max-calls`
+  stop. A run that read nothing now exits 2.
+  `test_a_run_that_read_nothing_exits_differently_from_one_that_ran_out_of_budget`.
+- `remember` reported success for lessons it did not store: a project slug with a space or a
+  leading dash was dropped by `LESSON_RE` on the way back in, and only a lesson's first line was
+  kept. It now stores the whole lesson on one line, or refuses with the reason.
+  `test_remember_saves_the_whole_lesson_or_says_why_it_cannot`.
+- `vote` and the MCP `feedback` tool answered "ok" for any id at all, so a typo read as recorded.
+  Both now report that no lesson has that id.
+  `test_a_vote_for_a_lesson_that_is_not_there_is_not_ok`.
+
 - A lesson's project slug was whatever the Reflector answered, and `compile_` makes a slug a
   filename, so a slug of `../../../escaped` wrote outside `~/memory` and replaced whatever file
   it landed on. The slug is chosen from text that merely passed through a session, so the target

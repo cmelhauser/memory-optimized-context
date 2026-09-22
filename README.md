@@ -15,7 +15,7 @@ start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.1.0`. 87 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.1.0`. 91 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. Not yet run against a real store.
@@ -191,9 +191,14 @@ calls the first time and none afterwards. `--since 2025-01-01` bounds the first 
 folder is read unless you name one with `--notes`.
 
 If the Reflector gives no answer part-way (a usage limit, an API or network error), `learn`
-stops, keeps and compiles what it has, and exits non-zero with a message. No cursor moves past
-text that went unanswered, so running it again later resumes where it stopped and sends nothing
-twice.
+stops, keeps and compiles what it has, and exits non-zero with a message naming the reason the
+Reflector gave. No cursor moves past text that went unanswered, so running it again later resumes
+where it stopped and sends nothing twice.
+
+The exit status tells a scheduled run what to do next: **0** everything was read, **1** stopped
+part-way with work done, run it again to carry on, **2** the Reflector answered nothing at all,
+so running it again will not help until whatever it reported is fixed. An expired `claude` login
+reads as 2.
 
 `--max-calls N` caps one run at about N Reflector calls: each reflection counts one, plus one for
 each lesson it returns, for the contradiction check it will need. The run stops the same way, so a
@@ -211,8 +216,8 @@ if you made the venv) or `docker exec memory python3 /app/memory` (Docker).
 
 ```
 memory search "query" [--project slug] [-k 8] [--all]
-memory remember "fact" --project slug
-memory vote <id> --helpful | --harmful
+memory remember "fact" --project slug        # refuses a slug that is not a slug, and keeps every line
+memory vote <id> --helpful | --harmful       # exits non-zero if no lesson has that id
 memory ingest [--transcript PATH --project slug] [--export conversations.json] [--wait SECONDS]
 memory learn --all | --repo PATH | --notes DIR | --transcripts | --export FILE
 memory compile
@@ -249,7 +254,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       87 tests, six-process concurrency test included
+tests/test_memory.py       91 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it

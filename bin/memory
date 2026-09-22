@@ -134,6 +134,23 @@ def score(r, now_ts=None):
 
 
 # ---------------------------------------------------------------- Claude adapter
+REFLECTOR = {"why": ""}   # why the last call gave no answer, so a stop can say it instead of "the log says why"
+
+def no_answer(why):
+    """Log why a call gave nothing and keep the reason. An unattended run's last line is often all the operator
+    ever sees, so it has to name the cause: an expired login reads nothing like a spent budget."""
+    log(why); REFLECTOR["why"] = why
+    return None
+
+def cli_reason(r):
+    """The reason a `claude -p` call failed. The CLI reports it in `result`, at the end of a JSON object whose head
+    is counters, so reading the first bytes of stdout tells the operator nothing."""
+    try: res = json.loads(r.stdout)
+    except json.JSONDecodeError: res = None
+    if isinstance(res, dict) and (res.get("result") or res.get("errors")):
+        return str(res.get("result") or res.get("errors"))[:300]
+    return (r.stderr or r.stdout or "no output").strip()[:300]
+
 def llm(prompt, system="You are a precise assistant. Output only what is asked.", max_tokens=1500):
     """Returns text, or None when no answer came. Order: SDK (ANTHROPIC_API_KEY) → `claude -p` CLI (uses your
     subscription). A failure is logged and returned as None, never raised; reflect() turns it into ReflectorFailed."""
@@ -148,7 +165,7 @@ def llm(prompt, system="You are a precise assistant. Output only what is asked."
         except ImportError:
             if mode == "sdk": raise SystemExit("pip install anthropic") from None
         except Exception as e:                      # API, rate-limit or network error; auto mode tries the CLI next
-            log("SDK call failed:", str(e)[:300])
+            no_answer(f"the SDK call failed: {str(e)[:300]}")
             if mode == "sdk": return None
     if mode in ("auto", "cli") and shutil.which("claude"):
         env = {**os.environ, "MEMORY_REFLECT": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}  # hooks check MEMORY_REFLECT and exit
@@ -157,17 +174,16 @@ def llm(prompt, system="You are a precise assistant. Output only what is asked."
                 r = subprocess.run(["claude", "-p", "--model", CFG["model"], "--output-format", "json", "--no-session-persistence"],
                                    input=f"{system}\n\n{prompt}", capture_output=True, text=True, env=env, cwd=d, timeout=180, check=False)
         except subprocess.TimeoutExpired:
-            log("claude -p timed out"); return None
+            return no_answer("claude -p timed out")
         if r.returncode != 0:
-            log("claude -p failed:", (r.stderr or r.stdout)[:300]); return None
+            return no_answer(f"claude -p failed: {cli_reason(r)}")
         try: res = json.loads(r.stdout)
         except json.JSONDecodeError: return r.stdout           # plain text: an older CLI, or a stand-in
         if not isinstance(res, dict): return r.stdout
         if res.get("is_error") or res.get("subtype", "success") != "success":   # the CLI's own verdict, not only its exit status
-            log("claude -p reported an error:", str(res.get("result") or res.get("errors"))[:300]); return None
+            return no_answer(f"claude -p reported an error: {cli_reason(r)}")
         return res.get("result") or ""
-    log("no Reflector: needs ANTHROPIC_API_KEY with `anthropic` installed, or `claude` on PATH")
-    return None
+    return no_answer("no Reflector: needs ANTHROPIC_API_KEY with `anthropic` installed, or `claude` on PATH")
 
 def parse_json(text):
     """The first JSON array or object in the text that parses. An answer that opens with a sentence of its own, brackets
@@ -295,7 +311,8 @@ def reflect(text, default_project, known_projects):
               REFLECT_SYS)
     if out is None:
         if CFG["llm"] == "none": return []
-        raise ReflectorFailed("the Reflector gave no answer; the log line above says why")
+        why, REFLECTOR["why"] = REFLECTOR["why"] or "the log line above says why", ""   # never report a stale reason
+        raise ReflectorFailed(f"the Reflector gave no answer: {why}")
     items = parse_json(out) or []
     found = [(as_project(i.get("project") or default_project, default_project), str(i["text"])) for i in items if isinstance(i, dict) and i.get("text")]
     BUDGET["used"] += 1 + len(found)
@@ -472,6 +489,15 @@ def split_tagged(text):
     return tagged, ("\n".join(rest).strip() if any(line.strip() for line in rest) else "")
 
 def sha(text): return hashlib.sha1(text.encode(errors="ignore")).hexdigest()[:12]
+
+def lesson_line(project, text):
+    """A journal line for one remembered lesson, or (None, why not). The journal is read back with LESSON_RE, so a
+    slug it does not match, or a lesson's second line, would be dropped in silence after the caller was told the
+    lesson was saved."""
+    p = as_project(project, ""); t = " ".join(str(text).split())
+    if not p: return None, f"{project!r} is not a project slug: lower-case letters or digits, then . _ - as well"
+    if not t: return None, "the lesson is empty"
+    return f"[{p}] {t}", None
 
 def cursor(c, key):
     r = c.execute("SELECT cursor FROM sources WHERE key=?", (key,)).fetchone()
@@ -673,7 +699,14 @@ def cmd_hook(a):
 
 STOPPED = "memory: {} stopped early: {}. What was read is kept and compiled; run it again to resume."
 
+def stop_early(cmd, why):
+    """Exit 1 after a run that read something, 2 after one that read nothing at all. A scheduled job can then tell
+    "I am part-way through" from "I have not worked since Friday", which no amount of re-running will fix."""
+    print(STOPPED.format(cmd, why), file=sys.stderr)
+    sys.exit(1 if BUDGET["used"] else 2)
+
 def cmd_ingest(a):
+    BUDGET.update(used=0)
     with Lock(a.wait), db() as c:
         new = ingest_journal(c)
         with stopping(new) as failed:
@@ -682,7 +715,7 @@ def cmd_ingest(a):
         post_ingest(c, new); c.commit()
         n, p = compile_(c); c.commit()
     log(f"ingest: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned")
-    if failed: sys.exit(STOPPED.format("ingest", failed[0]))
+    if failed: stop_early("ingest", failed[0])
 
 def cmd_learn(a):
     """Read everything once, then only what changed. Idempotent; cursors live in `sources`. At the first
@@ -701,7 +734,7 @@ def cmd_learn(a):
         post_ingest(c, new); c.commit()
         n, p = compile_(c); c.commit()
     log(f"learn: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned")
-    if failed: sys.exit(STOPPED.format("learn", failed[0]))
+    if failed: stop_early("learn", failed[0])
 
 def cmd_compile(a):
     with Lock(), db() as c:
@@ -714,7 +747,9 @@ def cmd_search(a):
             print(f"{r['id']}  ({r['votes']}) [{r['project']}] {r['text']}")
 
 def cmd_remember(a):
-    p = journal_write([f"[{a.project}] {a.text}"], "manual")
+    line, why = lesson_line(a.project, a.text)
+    if why: sys.exit(f"memory: nothing was saved: {why}")
+    p = journal_write([line], "manual")
     with Lock(), db() as c:
         new = ingest_journal(c); post_ingest(c, new); c.commit(); compile_(c); c.commit()
     log(f"remembered → {p.name}")
@@ -722,7 +757,9 @@ def cmd_remember(a):
 def cmd_vote(a):
     col = "helpful" if a.helpful else "harmful"
     with Lock(), db() as c:
-        c.execute(f"UPDATE lessons SET {col}={col}+1 WHERE id=?", (a.id,)); c.commit(); compile_(c); c.commit()
+        voted = c.execute(f"UPDATE lessons SET {col}={col}+1 WHERE id=?", (a.id,)).rowcount
+        c.commit(); compile_(c); c.commit()
+    if not voted: sys.exit(f"memory: no lesson has id {a.id}; `memory search` prints the id beside each one")
 
 def cmd_mcp(a):
     """MCP server. Works with mcp 1.x (FastMCP) and 2.x (MCPServer)."""
@@ -744,7 +781,9 @@ def cmd_mcp(a):
     @srv.tool()
     def remember(text: str, project: str = "all") -> str:
         """Save one durable lesson. project = slug or 'all'."""
-        journal_write([f"[{project}] {text}"], "mcp")
+        line, why = lesson_line(project, text)
+        if why: return f"not saved: {why}"
+        journal_write([line], "mcp")
         try:
             with Lock(), db() as c:
                 new = ingest_journal(c); post_ingest(c, new); c.commit(); compile_(c); c.commit()
@@ -758,10 +797,11 @@ def cmd_mcp(a):
         col = "helpful" if helpful else "harmful"
         try:
             with Lock(), db() as c:
-                c.execute(f"UPDATE lessons SET {col}={col}+1 WHERE id=?", (lesson_id,)); c.commit(); compile_(c); c.commit()
+                voted = c.execute(f"UPDATE lessons SET {col}={col}+1 WHERE id=?", (lesson_id,)).rowcount
+                c.commit(); compile_(c); c.commit()
         except LockBusy:
             return "busy: a learn run holds the store; send the feedback again when it ends"
-        return "ok"
+        return "ok" if voted else f"no lesson has id {lesson_id}"
 
     if a.transport == "http":
         srv.run(transport="streamable-http", host="0.0.0.0", port=a.port) if v2 else srv.run(transport="streamable-http")

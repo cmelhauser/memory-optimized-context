@@ -658,15 +658,16 @@ def test_learn_repo_refuses_a_folder_that_does_not_exist(m, tmp_path):
     assert not m.LOCK.exists()
 
 
-def test_learn_max_calls_stops_cleanly_and_the_next_run_carries_on(m, tmp_path, monkeypatch):
+def test_learn_max_calls_stops_cleanly_and_the_next_run_carries_on(m, tmp_path, monkeypatch, capsys):
     """--max-calls spreads a long backfill out. A reflection costs one call, plus one per lesson it returns for the
     contradiction check to come; once the budget is spent the run stops like a usage limit, and the next carries on."""
     repo = git_repo(tmp_path / "alpha", "alpha")
     calls = []
     monkeypatch.setattr(m, "llm", tracing_llm(calls))
     monkeypatch.setattr(sys, "argv", ["memory", "learn", "--repo", str(repo), "--max-calls", "1"])
-    with pytest.raises(SystemExit, match="its --max-calls budget of 1 is spent"):
+    with pytest.raises(SystemExit) as e:
         m.main()
+    assert e.value.code == 1 and "its --max-calls budget of 1 is spent" in capsys.readouterr().err
     assert [p for p in calls if "<conversation>" in p and "[git history of alpha]" in p]
     assert not [p for p in calls if "[documentation of alpha]" in p]
     monkeypatch.setattr(sys, "argv", ["memory", "learn", "--repo", str(repo)])
@@ -931,7 +932,7 @@ def test_backfill_stops_at_a_failed_window_and_the_next_run_resumes_there(m, tmp
     assert all(sum(f"marker{i:03d}" in s for s in sent) == 1 for i in range(40))
 
 
-def test_learn_stops_on_a_failed_reflector_keeps_its_progress_and_resumes(m, tmp_path, monkeypatch):
+def test_learn_stops_on_a_failed_reflector_keeps_its_progress_and_resumes(m, tmp_path, monkeypatch, capsys):
     """Commits reflected before the failure stay; a doc whose prose was not reflected keeps its tagged
     line, counted once, and gets its prose on the rerun."""
     repo = git_repo(tmp_path / "alpha", "alpha")
@@ -941,7 +942,7 @@ def test_learn_stops_on_a_failed_reflector_keeps_its_progress_and_resumes(m, tmp
     m.main.__globals__["sys"].argv = ["memory", "learn", "--repo", str(repo)]
     with pytest.raises(SystemExit) as e:
         m.main()
-    assert "stopped early" in str(e.value.code)
+    assert e.value.code == 1 and "stopped early" in capsys.readouterr().err   # 1: the run did read something
     assert "lesson from git history of alpha" in (m.COMPILED / "projects" / "alpha.md").read_text()
     monkeypatch.setattr(m, "llm", tracing_llm(calls))
     m.main()
@@ -1100,6 +1101,8 @@ def test_mcp_tools_answer_on_both_mcp_versions_and_transports(m, monkeypatch):
     hit = tools["recall"]("mcp", "p")
     assert "[p] mcp fact" in hit
     assert tools["feedback"](hit.split()[0], False) == "ok"
+    assert tools["feedback"]("nosuchid") == "no lesson has id nosuchid"     # never "ok" for a lesson that is not there
+    assert tools["remember"]("no slug", "my project").startswith("not saved: ")
     with m.db() as c:
         assert c.execute("SELECT harmful FROM lessons").fetchone()[0] == 1
 
@@ -1279,6 +1282,69 @@ def test_reconcile_ignores_an_answer_that_is_not_a_verdict(m):
         m.llm = lambda *a, **k: json.dumps([{"id": first, "verdict": "same"}])
         m.reconcile(c, second)
         assert [r["state"] for r in c.execute("SELECT state FROM lessons ORDER BY id")] == ["active", "active"]
+
+
+# ------------------------------------------------------------------ what an unattended run tells its operator
+
+
+def test_a_failed_cli_call_is_reported_by_its_reason_not_its_first_bytes(tmp_path, monkeypatch, capsys):
+    """The CLI puts its reason in `result`, at the end of a JSON object whose head is counters. Reading the first
+    bytes of that told the operator nothing: an expired login went unnoticed for two days."""
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    payload = json.dumps({"usage": {"input_tokens": 0, "cache_read_input_tokens": 0}, "modelUsage": {}, "x": "y" * 400,
+                          "is_error": True, "result": "Failed to authenticate: OAuth session expired"})
+    (fake / "claude").write_text(f"#!/bin/sh\ncat >/dev/null\nprintf '%s' '{payload}'\nexit 1\n")
+    (fake / "claude").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    m = load(tmp_path / "r", monkeypatch, MEMORY_LLM="cli")
+    assert m.llm("anything") is None
+    assert "Failed to authenticate: OAuth session expired" in capsys.readouterr().err
+    with pytest.raises(m.ReflectorFailed, match="Failed to authenticate"):
+        m.reflect("some text", "proj", set())
+
+
+def test_a_run_that_read_nothing_exits_differently_from_one_that_ran_out_of_budget(m, tmp_path, monkeypatch, capsys):
+    """Exit 1 means "part-way through, run me again"; exit 2 means "I read nothing at all", which running again
+    will not fix. A scheduled job logging "paused" twice a day for a week looked exactly like progress."""
+    repo = git_repo(tmp_path / "alpha", "alpha")
+    monkeypatch.setattr(m, "llm", lambda *a, **k: None)          # the Reflector answers nothing, from the first call
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    monkeypatch.setattr(sys, "argv", ["memory", "learn", "--repo", str(repo)])
+    with pytest.raises(SystemExit) as e:
+        m.main()
+    assert e.value.code == 2 and "stopped early" in capsys.readouterr().err
+
+
+def test_remember_saves_the_whole_lesson_or_says_why_it_cannot(m, tmp_path, monkeypatch, capsys):
+    """The journal is read back with LESSON_RE, so a slug it does not match, or a second line, would vanish after
+    the caller was told the lesson was saved."""
+    monkeypatch.setattr(sys, "argv", ["memory", "remember", "a lesson\nwith a second line", "--project", "Proj"])
+    m.main()
+    with m.db() as c:
+        assert [(r["project"], r["text"]) for r in c.execute("SELECT project, text FROM lessons")] == \
+            [("proj", "a lesson with a second line")]
+    monkeypatch.setattr(sys, "argv", ["memory", "remember", "spaces in the slug", "--project", "my project"])
+    with pytest.raises(SystemExit, match="is not a project slug"):
+        m.main()
+    assert m.lesson_line("-proj", "leading dash")[1] and m.lesson_line("proj", "   ")[1] == "the lesson is empty"
+    assert m.lesson_line("Proj", " two   spaces ") == ("[proj] two spaces", None)
+    with m.db() as c:
+        assert c.execute("SELECT count(*) FROM lessons").fetchone()[0] == 1   # only the first lesson was stored
+
+
+def test_a_vote_for_a_lesson_that_is_not_there_is_not_ok(m, monkeypatch, capsys):
+    """`vote` and the MCP `feedback` tool both reported success for any id at all, so a typo read as recorded."""
+    with m.db() as c:
+        kept, _ = m.upsert(c, "proj", "a real lesson")
+        c.commit()
+    monkeypatch.setattr(sys, "argv", ["memory", "vote", "nosuchid", "--helpful"])
+    with pytest.raises(SystemExit, match="no lesson has id nosuchid"):
+        m.main()
+    monkeypatch.setattr(sys, "argv", ["memory", "vote", kept, "--helpful"])
+    m.main()
+    with m.db() as c:
+        assert c.execute("SELECT helpful FROM lessons WHERE id=?", (kept,)).fetchone()[0] == 1
 
 
 # ------------------------------------------------------------------ the scripts themselves
