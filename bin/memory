@@ -379,7 +379,7 @@ def transcript_turns(path, start=0):
         for raw in f:
             if not raw.endswith(b"\n"): break
             pos += len(raw)
-            turn = line_turn(raw)
+            turn = any_turn(raw)
             if turn: out.append((turn, pos))
     return out, pos
 
@@ -397,6 +397,24 @@ def line_turn(raw):
     elif not isinstance(content, str):
         return None     # null, missing, or a shape this version does not know: not a turn, and never an exception
     return f"{kind.upper()}: {content.strip()}" if content.strip() else None
+
+def codex_turn(raw):
+    """One line of an OpenAI Codex rollout → "USER: text" or "ASSISTANT: text"; None for anything else. A rollout is
+    mostly tool calls, reasoning and world state; the conversation is its `response_item` message lines. The
+    `developer` role is Codex's own instructions, not the operator's."""
+    try: j = json.loads(raw)
+    except json.JSONDecodeError: return None
+    pay = j.get("payload") if isinstance(j, dict) else None
+    if not isinstance(pay, dict) or j.get("type") != "response_item" or pay.get("type") != "message": return None
+    if pay.get("role") not in ("user", "assistant"): return None
+    blocks = pay.get("content") if isinstance(pay.get("content"), list) else []
+    text = "\n".join(b["text"] for b in blocks if isinstance(b, dict) and isinstance(b.get("text"), str))
+    return f"{pay['role'].upper()}: {text.strip()}" if text.strip() else None
+
+def any_turn(raw):
+    """One transcript line in any shape this tool reads: Claude Code and Claude Desktop's agent mode (`type`),
+    Cursor (`role`), or a Codex rollout. A file needs no declared format; each line answers for itself."""
+    return line_turn(raw) or codex_turn(raw)
 
 def reflector_transcript(path):
     """A transcript the Reflector's own `claude -p` call left behind, before it passed --no-session-persistence: its
@@ -598,9 +616,13 @@ def project_of(cwd):
     return (m.group(1) if m else Path(cwd).name).lower() or "all"
 
 def line_cwd(raw):
-    """The `cwd` on one transcript line; None for a line without one, or one that is not a JSON object."""
-    try: return json.loads(raw).get("cwd")
-    except (ValueError, AttributeError): return None
+    """The `cwd` on one transcript line; None for a line without one, or one that is not a JSON object. Claude Code
+    stamps it on every turn; a Codex rollout records it once, in its `session_meta` header."""
+    try: j = json.loads(raw)
+    except ValueError: return None
+    if not isinstance(j, dict): return None
+    pay = j.get("payload")
+    return j.get("cwd") or (pay.get("cwd") if isinstance(pay, dict) else None)
 
 def transcript_cwd(files):
     """The first `cwd` recorded in any of these transcripts; Claude Code stamps it on every turn."""
@@ -609,6 +631,21 @@ def transcript_cwd(files):
             cwd = next((c for c in map(line_cwd, fh) if c), None)
         if cwd: return cwd
     return None
+
+def decode_cwd(name, base="/"):
+    """A folder name that encoded a path by turning '/' into '-' → the deepest real path it names, or None. A
+    repository called `doc-ingestion` keeps its own hyphens, so only the filesystem can say which ones were
+    separators: walk it, taking the longest segment that exists at each step. Cursor names its folders this way and,
+    unlike Claude Code, records no cwd inside the transcript. Stopping part-way is useful rather than a failure: a
+    worktree that has since been removed still names the repository it was cut from."""
+    parts = [p for p in name.strip("-").split("-") if p]
+    path, i = Path(base), 0
+    while i < len(parts):
+        for j in range(len(parts), i, -1):
+            candidate = path / "-".join(parts[i:j])
+            if candidate.exists(): path, i = candidate, j; break
+        else: break
+    return str(path) if i else None
 
 def claude_code_project_dirs(root=None):
     """~/.claude/projects/<encoded-cwd>/ → (project slug, [transcript paths]). The encoding turns '/' and '.' into '-',
@@ -621,10 +658,57 @@ def claude_code_project_dirs(root=None):
         cwd = transcript_cwd(files)
         yield (project_of(cwd) if cwd else d.name.rstrip("-").rsplit("-", 1)[-1].lower() or "all"), files
 
-def learn_transcripts(c, root=None):
+def machine_roots():
+    """Where this machine keeps transcripts, resolved when asked rather than at import: HOME differs between the
+    native install and the container, and it is what the tests point elsewhere."""
+    home = Path.home()
+    return {"cursor": home / ".cursor" / "projects",
+            "claude-desktop": home / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions",
+            "codex": home / ".codex" / "sessions"}
+
+def repo_of(cwd):
+    """The repository a recorded cwd sits in, or None. These sessions are often run in a scratch folder, and a
+    folder named for the day's task would otherwise become a project of its own."""
+    p = Path(cwd)
+    for d in (p, *p.parents):
+        if (d / ".git").exists(): return project_of(d)
+    return None
+
+def cursor_project_dirs(root=None):
+    """~/.cursor/projects/<encoded-cwd>/agent-transcripts/<id>/<id>.jsonl → (slug, [paths]). Cursor runs the same
+    hooks, so new sessions arrive through the Stop hook; this is for everything written before the hooks existed."""
+    root = Path(root or machine_roots()["cursor"])
+    for d in sorted(root.glob("*/")):
+        files = sorted(d.rglob("*.jsonl"))       # a session's transcript, and its subagents' beside it
+        if not files: continue
+        cwd = decode_cwd(d.name)
+        yield ((cwd and repo_of(cwd)) or "cursor"), files   # a folder for a path that is gone belongs to the tool
+
+def loose_transcripts(root, slug):
+    """Every *.jsonl under a folder, one (slug, [path]) pair per file: Claude Desktop's agent-mode sessions, a Codex
+    rollout store, or whatever `--transcripts-from` names. A session run inside a repository is filed under it; the
+    rest are filed under `slug`, because they belong to the tool rather than to a project."""
+    for f in sorted(Path(root).rglob("*.jsonl")):
+        if reflector_transcript(f): continue
+        cwd = transcript_cwd([f])
+        yield ((cwd and repo_of(cwd)) or slug), [f]
+
+def transcript_sources(root=None, extra=None):
+    """Every transcript this machine holds. Claude Code covers the CLI, the editor extensions and the desktop app's
+    Code tab, which all write to the same folder; Cursor, Claude Desktop's agent mode and Codex keep their own.
+    A `root` given explicitly stands alone, so a caller can read one folder and nothing else."""
+    yield from claude_code_project_dirs(root)
+    if root is None:
+        roots = machine_roots()
+        if roots["cursor"].is_dir(): yield from cursor_project_dirs()
+        for name in ("claude-desktop", "codex"):
+            if roots[name].is_dir(): yield from loose_transcripts(roots[name], name)
+    for d in extra or []: yield from loose_transcripts(Path(d).expanduser(), Path(d).name.lower())
+
+def learn_transcripts(c, root=None, extra=None):
     new = []
     with carrying(new):
-        for slug, files in claude_code_project_dirs(root):
+        for slug, files in transcript_sources(root, extra):
             for f in files: new += checkpoint(c, ingest_transcript(c, f, slug, backfill=True))
     return new
 
@@ -739,7 +823,7 @@ def cmd_learn(a):
             if a.all: new += learn_all(c, a.repos or (Path.home() / "GitHub"), a.notes, a.exports or (ROOT / "exports"))
             for r in a.repo or []: new += learn_repo(c, r, a.since)
             if a.notes and not a.all: new += learn_notes(c, a.notes, a.project)
-            if a.transcripts and not a.all: new += learn_transcripts(c)
+            if a.transcripts or a.transcripts_from: new += learn_transcripts(c, extra=a.transcripts_from)
             for e in a.export or []: new += ingest_export(c, e)
         post_ingest(c, new); c.commit()
         n, p = compile_(c); c.commit()
@@ -832,7 +916,9 @@ def main():
     s.add_argument("--since", help="first-time commit window for --repo, e.g. 2025-01-01")
     s.add_argument("--notes", help="folder of .md/.txt notes")
     s.add_argument("--project", help="project slug for --notes (default: folder name)")
-    s.add_argument("--transcripts", action="store_true", help="backfill every Claude Code transcript under ~/.claude/projects")
+    s.add_argument("--transcripts", action="store_true",
+                   help="backfill every transcript this machine holds: Claude Code, Cursor, Claude Desktop's agent mode, Codex")
+    s.add_argument("--transcripts-from", action="append", help="a folder of transcripts to read as well")
     s.add_argument("--export", action="append", help="claude.ai conversations.json")
     s.add_argument("--exports", help="folder of exports for --all (default $MEMORY_ROOT/exports)")
     s.add_argument("--max-calls", type=int, help="stop after about N Reflector calls, contradiction checks included; the next run carries on")

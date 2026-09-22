@@ -9,6 +9,18 @@ until the system has run against a real store for at least a month.
 
 ### Added
 
+- `learn --transcripts` reads every transcript the machine holds, not only Claude Code's:
+  Cursor's own store including each session's subagents, Claude Desktop's agent-mode sessions, and
+  Codex rollouts, whose conversation is read out of the tool calls, reasoning and world state
+  around it. `--transcripts-from DIR` takes any other folder. A session run inside a git
+  repository is filed under it whatever wrote it; the rest are filed under their tool.
+  `test_the_backfill_reads_cursor_desktop_and_codex_as_well`,
+  `test_a_codex_rollout_reads_as_a_transcript`, `test_transcripts_from_reads_a_folder_you_name`.
+- `decode_cwd`: a folder name that encoded a path by turning `/` into `-` is decoded against the
+  filesystem, which is the only way to tell a repository's own hyphen from a path separator. It
+  stops at the deepest path that exists, so a worktree since removed still names its repository.
+  `test_a_folder_name_that_encoded_a_path_is_decoded_against_the_filesystem`.
+
 - `learn --max-calls N`: a run stops after about N Reflector calls, each reflection counting one
   plus one per lesson it returns, and keeps its place like a usage-limit stop, so a first backfill
   can be spread over days. `test_learn_max_calls_stops_cleanly_and_the_next_run_carries_on`.

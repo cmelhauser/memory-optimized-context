@@ -1386,6 +1386,109 @@ def test_a_checkpoint_reconciles_before_it_commits(m, monkeypatch):
         assert c.execute("SELECT count(*) FROM lessons").fetchone()[0] == 1
 
 
+# ------------------------------------------------------------------ every transcript this machine holds
+
+
+def codex_rollout(path, cwd, turns):
+    """A Codex rollout: a session header, then `response_item` message lines among the noise it really writes."""
+    lines = [{"type": "session_meta", "payload": {"id": "s1", "cwd": cwd}},
+             {"type": "turn_context", "payload": {"model": "gpt-x"}},
+             {"type": "response_item", "payload": {"type": "message", "role": "developer",
+                                                   "content": [{"type": "input_text", "text": "Codex's own instructions"}]}}]
+    for role, text in turns:
+        lines.append({"type": "response_item", "payload": {"type": "message", "role": role,
+                                                           "content": [{"type": "input_text", "text": text}]}})
+        lines.append({"type": "response_item", "payload": {"type": "reasoning", "summary": []}})
+        lines.append({"type": "event_msg", "payload": {"type": "task_started"}})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(x) + "\n" for x in lines))
+    return path
+
+
+def test_a_codex_rollout_reads_as_a_transcript(m, tmp_path):
+    """A rollout is mostly tool calls, reasoning and world state. Its conversation is the `response_item` messages,
+    and the `developer` role is Codex's own instructions rather than anything the operator said."""
+    p = codex_rollout(tmp_path / "rollout.jsonl", "/tmp/somewhere", [("user", "add a retry"), ("assistant", "done")])
+    text, end = m.claude_code_turns(p)
+    assert text == "USER: add a retry\n\nASSISTANT: done" and end == p.stat().st_size
+    assert m.line_cwd(json.dumps({"type": "session_meta", "payload": {"cwd": "/x"}}).encode()) == "/x"
+
+
+def test_a_folder_name_that_encoded_a_path_is_decoded_against_the_filesystem(m, tmp_path):
+    """Cursor names a folder for the working directory, turning '/' into '-', and records no cwd inside the
+    transcript. A repository with a hyphen in its name is why the filesystem has to settle where the '/' were."""
+    repo = tmp_path / "GitHub" / "doc-ingestion"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "sub-dir").mkdir()
+    base = str(tmp_path).strip("/").replace("/", "-")
+    assert m.decode_cwd(f"{base}-GitHub-doc-ingestion-sub-dir", "/") == str(repo / "sub-dir")
+    assert m.decode_cwd(f"{base}-GitHub-doc-ingestion-worktree-that-is-gone", "/") == str(repo)   # deepest real path
+    assert m.decode_cwd("nothing-here-at-all", "/") is None
+    assert m.repo_of(str(repo / "sub-dir")) == "doc-ingestion" and m.repo_of(str(tmp_path)) is None
+
+
+def test_the_backfill_reads_cursor_desktop_and_codex_as_well(m, tmp_path, monkeypatch):
+    """Claude Code's folder holds the CLI, the editor extensions and the desktop app's Code tab. Cursor, Claude
+    Desktop's agent mode and Codex keep their own, and a session run outside a repository belongs to its tool."""
+    home = tmp_path / "home"
+    repo = home / "GitHub" / "alpha"
+    (repo / ".git").mkdir(parents=True)
+    monkeypatch.setattr(m.Path, "home", classmethod(lambda cls: home))
+
+    claude = home / ".claude" / "projects" / "-x-alpha"
+    claude.mkdir(parents=True)
+    transcript(claude / "s.jsonl", [("user", "from claude code")], cwd=str(repo))
+
+    enc = str(repo).strip("/").replace("/", "-")
+    cursor = home / ".cursor" / "projects" / enc / "agent-transcripts" / "t1"
+    cursor.mkdir(parents=True)
+    transcript(cursor / "t1.jsonl", [("user", "from cursor")])
+    (cursor / "subagents").mkdir()
+    transcript(cursor / "subagents" / "sub.jsonl", [("user", "from a cursor subagent")])
+    gone = home / ".cursor" / "projects" / "empty-window" / "agent-transcripts" / "t2"
+    gone.mkdir(parents=True)
+    transcript(gone / "t2.jsonl", [("user", "from a cursor window with no folder open")])
+    (home / ".cursor" / "projects" / "a-folder-with-no-transcripts").mkdir()
+
+    desktop = home / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions" / "a" / "b"
+    desktop.mkdir(parents=True)
+    transcript(desktop / "audit.jsonl", [("user", "from claude desktop")], cwd=str(desktop / "outputs"))
+
+    codex_rollout(home / ".codex" / "sessions" / "2026" / "r.jsonl", str(repo), [("user", "from codex in the repo")])
+    codex_rollout(home / ".codex" / "sessions" / "2026" / "s.jsonl", str(home / "Documents" / "friday"),
+                  [("user", "from codex in a scratch folder")])
+    transcript(home / ".codex" / "sessions" / "2026" / "left.jsonl",       # the Reflector's own, from before #10
+               [("user", m.REFLECT_SYS[:80] + " ... a window of somebody else's transcript")])
+
+    got = {}
+    for slug, files in m.transcript_sources():
+        got.setdefault(slug, []).extend(f.name for f in files)
+    assert sorted(got["alpha"]) == ["r.jsonl", "s.jsonl", "sub.jsonl", "t1.jsonl"]   # Claude Code, Cursor and its
+    assert got["cursor"] == ["t2.jsonl"]          # subagent's, and a Codex rollout, all run in the same repository
+    assert got["claude-desktop"] == ["audit.jsonl"] and got["codex"] == ["s.jsonl"]   # no repository: the tool's own
+
+    monkeypatch.setattr(m, "llm", tracing_llm([]))
+    with m.db() as c:
+        m.learn_transcripts(c)
+        projects = {r[0] for r in c.execute("SELECT DISTINCT project FROM lessons")}
+    assert projects == {"alpha", "cursor", "claude-desktop", "codex"}
+
+
+def test_transcripts_from_reads_a_folder_you_name(m, tmp_path, monkeypatch):
+    """`--transcripts-from` takes any folder of transcripts, in any of the shapes above."""
+    home = tmp_path / "home"
+    (home / ".claude" / "projects").mkdir(parents=True)
+    monkeypatch.setattr(m.Path, "home", classmethod(lambda cls: home))
+    loose = tmp_path / "Archive"
+    (loose / "old").mkdir(parents=True)
+    transcript(loose / "old" / "one.jsonl", [("user", "an archived session")])
+    monkeypatch.setattr(m, "llm", tracing_llm([]))
+    monkeypatch.setattr(sys, "argv", ["memory", "learn", "--transcripts-from", str(loose)])
+    m.main()
+    with m.db() as c:
+        assert [r[0] for r in c.execute("SELECT DISTINCT project FROM lessons")] == ["archive"]
+
+
 # ------------------------------------------------------------------ the scripts themselves
 
 

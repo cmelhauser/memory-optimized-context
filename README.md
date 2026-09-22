@@ -15,7 +15,7 @@ start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.1.0`. 93 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.1.0`. 97 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. Not yet run against a real store.
@@ -212,6 +212,26 @@ python3 bin/memory learn --all                           # native
 docker exec memory python3 /app/memory learn --all       # Docker
 ```
 
+### What `--transcripts` reads
+
+| Where | Written by |
+| --- | --- |
+| `~/.claude/projects` | Claude Code: the CLI, the editor extensions, and the desktop app's Code tab |
+| `~/.cursor/projects` | Cursor, including each session's subagents |
+| `~/Library/Application Support/Claude/local-agent-mode-sessions` | Claude Desktop's agent mode |
+| `~/.codex/sessions` | Codex rollouts, whose conversation is read out of the surrounding tool calls |
+| anywhere else | `--transcripts-from DIR`, for an archive or a folder you name |
+
+A session run inside a git repository is filed under that repository, whatever wrote it; the rest
+are filed under the tool that wrote them (`cursor`, `claude-desktop`, `codex`). Cursor records no
+working directory in its transcripts, so the folder name, which encoded one by turning `/` into
+`-`, is decoded against the filesystem: a repository with a hyphen in its name can be told from a
+path separator only by what exists on disk.
+
+Chats in Claude Desktop and the iOS and Android apps live in your account rather than on the
+machine. Request a data export from claude.ai, put `conversations.json` in `~/memory/exports/`,
+and `learn --all` reads them.
+
 ## Commands
 
 Prefix with `python3 ~/GitHub/memory-optimized-context/bin/memory` (native; `.venv/bin/python3`
@@ -257,7 +277,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       93 tests, six-process concurrency test included
+tests/test_memory.py       97 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
