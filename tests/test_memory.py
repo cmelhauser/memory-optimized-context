@@ -1042,7 +1042,7 @@ def test_lock_gives_up_with_lock_busy_and_tolerates_a_vanished_lock(m):
     assert issubclass(m.LockBusy, SystemExit)
     m.LOCK.rmdir()
     with m.Lock():
-        m.LOCK.rmdir()
+        shutil.rmtree(m.LOCK)        # someone removed it under us; releasing must still be quiet
     assert not m.LOCK.exists()
 
 
@@ -1551,6 +1551,70 @@ def test_a_database_handle_is_closed_when_its_block_ends(m):
         c2.execute("SELECT 1")
     with m.db() as c3:
         assert [r[0] for r in c3.execute("SELECT text FROM lessons")] == ["a lesson"]
+
+
+# ------------------------------------------------------------------ the lock, when two writers meet
+
+
+def test_a_waiter_survives_the_lock_vanishing_between_its_mkdir_and_its_stat(m, monkeypatch):
+    """The holder can release in the moment between a waiter's failed `mkdir` and the `stat` that asks how old the
+    lock is. That `stat` used to raise FileNotFoundError at the waiter, which for a hook meant a lost run."""
+    m.ROOT.mkdir(parents=True, exist_ok=True)
+    m.LOCK.mkdir()
+    attempts = []
+    real_take = m.Lock.take
+    def take(self):
+        attempts.append(1)
+        if len(attempts) == 1:
+            shutil.rmtree(m.LOCK)                  # the holder lets go, right after our mkdir failed
+            return False
+        return real_take(self)
+    monkeypatch.setattr(m.Lock, "take", take)
+    with m.Lock(wait=1) as lk:
+        assert lk.mine() and len(attempts) == 2
+    assert not m.LOCK.exists()
+
+
+def test_only_one_writer_breaks_a_crashed_holders_lock(m):
+    """Two writers that both judge a lock stale must not both break it, or both would believe they hold what they
+    create next, and each one's release would remove the other's lock."""
+    m.ROOT.mkdir(parents=True, exist_ok=True)
+    m.LOCK.mkdir()
+    os.utime(m.LOCK, (0, 0))                       # untouched since 1970: its holder died
+    m.BREAK.mkdir()                                # another writer is already breaking it
+    with pytest.raises(m.LockBusy), m.Lock(wait=0.3):
+        pass
+    assert m.LOCK.exists()                         # left for the writer that got there first
+    m.BREAK.rmdir()
+    with m.Lock(wait=1) as lk:
+        assert lk.mine() and not m.BREAK.exists()
+
+
+def test_a_lock_that_is_gone_or_fresh_again_by_then_is_left_alone(m):
+    """Taking the break lock costs a moment, and in that moment the lock may have been released, or taken and
+    refreshed by a writer that is very much alive. Either way there is nothing to break."""
+    m.ROOT.mkdir(parents=True, exist_ok=True)
+    lk = m.Lock()
+    lk.crashed_holders_lock()                      # released while we were taking the break lock
+    assert not m.LOCK.exists() and not m.BREAK.exists()
+    m.LOCK.mkdir()                                 # touched a moment ago: somebody is alive in there
+    lk.crashed_holders_lock()
+    assert m.LOCK.exists() and not m.BREAK.exists()
+    m.LOCK.rmdir()
+
+
+def test_a_holder_leaves_a_lock_that_is_no_longer_its_own(m, monkeypatch):
+    """The lock carries its holder's token. Touching or removing one that has since been taken by somebody else is
+    how a single broken lock used to cascade into no lock at all."""
+    monkeypatch.setattr(m, "LOCK_BEAT", 0.01)
+    with m.Lock() as lk:
+        assert lk.mine()
+        (m.LOCK / "owner").write_text("another writer")
+        os.utime(m.LOCK, (0, 0))
+        time.sleep(0.15)                           # many beats: none of them ours to make
+        assert m.LOCK.stat().st_mtime == 0
+    assert m.LOCK.exists() and (m.LOCK / "owner").read_text() == "another writer"
+    shutil.rmtree(m.LOCK)
 
 
 # ------------------------------------------------------------------ the scripts themselves

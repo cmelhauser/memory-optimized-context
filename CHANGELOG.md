@@ -91,6 +91,18 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A writer waiting for the lock asked how old it was, and the holder could release in the moment
+  between that writer's failed `mkdir` and its `stat`. The `FileNotFoundError` reached the caller:
+  for a Stop hook, a lost run. A lock that vanishes mid-check now simply means "try again".
+  `test_a_waiter_survives_the_lock_vanishing_between_its_mkdir_and_its_stat`.
+- Breaking a crashed holder's lock was not exclusive. Two writers that both judged it stale could
+  both remove it and both create their own, after which each one's release removed whichever lock
+  was there. Breaking now happens under `.lock.break`, and the staleness is checked again while
+  holding it. `test_only_one_writer_breaks_a_crashed_holders_lock`.
+- A lock now carries its holder's token, and a holder only touches and only removes a lock that is
+  still its own, so one broken lock cannot cascade into no lock at all.
+  `test_a_holder_leaves_a_lock_that_is_no_longer_its_own`.
+
 - `fts_query` kept only ASCII word characters, so an accented or non-Latin word was cut to a stump
   that matched nothing: a lesson could not be found by its own words, by `search`, by MCP recall,
   or by the contradiction check that would have seen it as a duplicate. Tokens are now `\\w` under

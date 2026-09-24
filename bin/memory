@@ -30,7 +30,7 @@ from pathlib import Path
 
 # ---------------------------------------------------------------- config
 ROOT = Path(os.environ.get("MEMORY_ROOT", Path.home() / "memory"))
-JOURNAL, COMPILED, ARCHIVE, LOCK = (ROOT / p for p in ("journal", "compiled", "archive", ".lock"))
+JOURNAL, COMPILED, ARCHIVE, LOCK, BREAK = (ROOT / p for p in ("journal", "compiled", "archive", ".lock", ".lock.break"))
 DB = Path(os.environ.get("MEMORY_DB", ROOT / "memory.db"))   # in Docker: a named volume, not a macOS bind mount
 CFG = {
     "llm": os.environ.get("MEMORY_LLM", "auto"),          # auto | sdk | cli | none
@@ -59,36 +59,67 @@ def log(*a):
 
 
 # ---------------------------------------------------------------- lock (single writer)
-LOCK_WAIT = 20   # seconds a writer waits for the lock; the SessionStart hook passes `ingest --wait 2`
-LOCK_BEAT = 60   # a holder touches the lock this often, so only a crashed holder's lock goes 600 s untouched
+LOCK_WAIT = 20    # seconds a writer waits for the lock; the SessionStart hook passes `ingest --wait 2`
+LOCK_BEAT = 60    # a holder touches the lock this often, so only a crashed holder's lock goes 600 s untouched
+LOCK_STALE = 600  # a lock untouched for this long belonged to a process that died without releasing it
 
 class LockBusy(SystemExit):
     """Another writer held the lock for the whole wait, usually a long `learn`. A SystemExit, so the CLI still exits
     with the message; the MCP tools catch it and answer "busy" rather than stop the server."""
 
 class Lock:
+    """One writer at a time, through `mkdir`, which is atomic everywhere this runs.
+
+    The holder writes its own token inside the lock and touches it every LOCK_BEAT, so a lock untouched for
+    LOCK_STALE belonged to a process that died. Breaking such a lock happens under a second, shorter-lived lock, so
+    two writers that both judge it stale cannot both break it and both believe they hold what follows. The token is
+    what makes the rest honest: a holder only touches and only removes a lock that is still its own."""
     def __init__(self, wait=None):
         self.wait = LOCK_WAIT if wait is None else wait
         self.done = threading.Event()
+        self.token = f"{os.getpid()}:{time.time_ns()}"
+    def owner(self):
+        """The token inside the lock, or None if there is no lock or it is being written right now."""
+        try: return (LOCK / "owner").read_text()
+        except OSError: return None
+    def mine(self):
+        return self.owner() == self.token
+    def take(self):
+        """Create the lock and stamp it. False when another writer already holds it."""
+        try: LOCK.mkdir()
+        except FileExistsError: return False
+        (LOCK / "owner").write_text(self.token)
+        return True
+    def crashed_holders_lock(self):
+        """Remove a lock nobody has touched for LOCK_STALE, under `.lock.break` so only one writer can do it. The
+        staleness is checked again while holding that, because the lock seen a moment ago may be a live one by now."""
+        try: BREAK.mkdir()
+        except (FileExistsError, FileNotFoundError): return
+        try:
+            if time.time() - LOCK.stat().st_mtime > LOCK_STALE:
+                log(f"breaking a lock left by {self.owner() or 'a crashed writer'}")
+                shutil.rmtree(LOCK, ignore_errors=True)
+        except FileNotFoundError: pass      # released while we were taking the break lock: nothing to break
+        finally: BREAK.rmdir()
     def __enter__(self):
         ROOT.mkdir(parents=True, exist_ok=True)
-        for _ in range(int(self.wait * 10)):
-            try:
-                LOCK.mkdir()
-            except FileExistsError:
-                if time.time() - LOCK.stat().st_mtime > 600:   # untouched for 600 s: its holder crashed
-                    LOCK.rmdir(); continue
-                time.sleep(0.1)
-            else:
+        for _ in range(max(1, int(self.wait * 10))):
+            if self.take():
                 threading.Thread(target=self.beat, daemon=True).start(); return self
+            try: stale = time.time() - LOCK.stat().st_mtime > LOCK_STALE
+            except FileNotFoundError: continue   # released between our mkdir and our stat: take it on the next turn
+            if stale: self.crashed_holders_lock()
+            else: time.sleep(0.1)
         raise LockBusy(f"memory: the lock was held for all of {self.wait:g} s (a long `learn`?); try again when it ends")
     def beat(self):
-        """Keep the lock fresh for as long as it is held; a `learn` can hold it for hours."""
+        """Keep the lock fresh for as long as it is held; a `learn` can hold it for hours. A lock that is no longer
+        ours is not ours to keep alive."""
         while not self.done.wait(LOCK_BEAT):
-            with suppress(FileNotFoundError): os.utime(LOCK)
+            if not self.mine(): return
+            with suppress(OSError): os.utime(LOCK)
     def __exit__(self, *e):
         self.done.set()
-        with suppress(FileNotFoundError): LOCK.rmdir()
+        if self.mine(): shutil.rmtree(LOCK, ignore_errors=True)
 
 
 # ---------------------------------------------------------------- store

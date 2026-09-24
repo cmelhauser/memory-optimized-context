@@ -7,7 +7,9 @@ proves each closure is named.
 |---|---|---|
 | Two hooks fire in the same tick | one journal file per event, exclusive create, ns stamp + PID | `test_journal_write_never_appends`, `test_parallel_hook_processes_do_not_lose_updates` |
 | Two compiles at once | `mkdir .lock` is atomic; the loser waits, then proceeds | `test_lock_serialises_writers` |
-| A compile crashes holding the lock | a lock nobody has touched for 600 s is broken; a live holder touches it every 60 s | `test_stale_lock_is_broken` |
+| A compile crashes holding the lock | a lock nobody has touched for 600 s is broken, under `.lock.break` so only one writer can do it, with the staleness checked again while holding that; a live holder touches it every 60 s | `test_stale_lock_is_broken`, `test_only_one_writer_breaks_a_crashed_holders_lock` |
+| The holder releases as a waiter checks the lock's age | a lock that vanishes mid-check means "try again", not an error at the waiter | `test_a_waiter_survives_the_lock_vanishing_between_its_mkdir_and_its_stat` |
+| A broken lock is taken by somebody else | the lock carries its holder's token; a holder touches and removes only its own | `test_a_holder_leaves_a_lock_that_is_no_longer_its_own` |
 | A `learn` runs past 600 s | its lock's heartbeat keeps it fresh, so no writer takes it for a crashed holder's | `test_a_live_holder_keeps_its_lock_fresh` |
 | A `learn` holds the lock for hours | writers wait 20 s, then give up with `LockBusy`; the SessionStart hook's `ingest --wait 2` gives up after 2 s and the session reads `compiled/` as it was; a Stop hook's `LESSONS:` journal file is already written; the MCP tools answer "busy" | `test_lock_gives_up_with_lock_busy_and_tolerates_a_vanished_lock`, `test_ingest_wait_bounds_how_long_session_start_can_block`, `test_mcp_tools_answer_busy_while_a_learn_holds_the_lock` |
 | Reader sees a half-written `PLAYBOOK.md` | `.tmp` then `os.replace` | `test_compile_is_atomic_and_removes_empty_projects` |
