@@ -1617,6 +1617,73 @@ def test_a_holder_leaves_a_lock_that_is_no_longer_its_own(m, monkeypatch):
     shutil.rmtree(m.LOCK)
 
 
+# ------------------------------------------------------------------ nothing is read by halves
+
+
+def test_a_long_document_is_read_in_full_and_marked_read_only_when_it_is(m, tmp_path, monkeypatch):
+    """A document over DOC_MAX_CHARS was cut to its first 20,000 characters and then recorded as read, so the rest
+    was never offered again. It is now read in pieces, and the cursor moves only after the last of them."""
+    calls = []
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    body = "\n".join(f"line {i} of the long note, with enough text on it to matter" for i in range(1200))
+    (notes / "long.md").write_text(body)
+    assert len(body) > 3 * m.DOC_MAX_CHARS
+    with m.db() as c:
+        m.learn_notes(c, notes)
+        c.commit()
+        assert m.cursor(c, f"notes:{notes / 'long.md'}") == m.sha(body)
+    sent = "".join(p for p in calls if "<conversation>" in p)
+    assert "line 0 of" in sent and "line 1199 of" in sent          # the end of the note, not only its beginning
+    assert sum(1 for p in calls if "(part " in p) >= 3
+
+
+def test_a_document_whose_last_piece_went_unanswered_is_offered_again(m, tmp_path, monkeypatch):
+    """The cursor may not move past text the Reflector never answered, however many pieces were answered before it."""
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    body = "\n".join(f"line {i} of the long note, with enough text on it to matter" for i in range(1200))
+    (notes / "long.md").write_text(body)
+    calls = []
+    monkeypatch.setattr(m, "llm", failing_llm(calls, 1))           # the first piece is answered, the next is not
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    with m.db() as c, pytest.raises(m.ReflectorFailed):
+        m.learn_notes(c, notes)
+    with m.db() as c:
+        assert m.cursor(c, f"notes:{notes / 'long.md'}") == f"tagged:{m.sha(body)}"   # still owed
+        monkeypatch.setattr(m, "llm", tracing_llm(calls))
+        m.learn_notes(c, notes)
+        c.commit()
+        assert m.cursor(c, f"notes:{notes / 'long.md'}") == m.sha(body)
+
+
+def test_a_long_exported_conversation_keeps_more_than_its_tail(m, tmp_path, monkeypatch):
+    """`reflect` cuts what it is given to the last 30,000 characters. A conversation longer than that lost its
+    beginning, and its cursor was then set as though all of it had been read."""
+    calls = []
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    long_turn = "a paragraph of the conversation, said at some length.\n" * 900
+    export = tmp_path / "conversations.json"
+    export.write_text(json.dumps([{"uuid": "u", "name": "Long one", "updated_at": "1", "chat_messages": [
+        {"sender": "human", "text": "the opening question nobody used to see"},
+        {"sender": "assistant", "text": long_turn},
+        {"sender": "human", "text": "the closing question"}]}]))
+    with m.db() as c:
+        m.ingest_export(c, export)
+        c.commit()
+    sent = "".join(p for p in calls if "<conversation>" in p)
+    assert "the opening question nobody used to see" in sent and "the closing question" in sent
+    assert len([p for p in calls if "<conversation>" in p]) > 1
+
+
+def test_pieces_break_at_a_line_end_where_there_is_one(m):
+    assert m.pieces_of("", 10) == [] and m.pieces_of("   ", 10) == []
+    assert m.pieces_of("one line", 10) == ["one line"]
+    assert m.pieces_of("abcdefgh\nijklmnop\nqrstuvwx", 10) == ["abcdefgh", "ijklmnop", "qrstuvwx"]
+    assert m.pieces_of("abcdefghijklmnopqrst", 10) == ["abcdefghij", "klmnopqrst"]   # no line end to break at
+
+
 # ------------------------------------------------------------------ the scripts themselves
 
 

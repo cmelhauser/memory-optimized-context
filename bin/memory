@@ -535,7 +535,9 @@ def ingest_export(c, path):
             if row and row["cursor"] == upd: continue
             text = "\n\n".join(f"{m.get('sender','').upper()}: {t}" for m in cv.get("chat_messages", []) if (t := export_msg_text(m)))
             slug = re.sub(r"[^a-z0-9]+", "-", (cv.get("name") or "all").lower()).strip("-")[:40] or "all"
-            got = [upsert(c, p, t) for p, t in reflect(text, slug, known_projects(c))]
+            got = [upsert(c, p, t)                       # a long conversation is several windows, not just its tail
+                   for part in pieces_of(text, CFG["transcript_chars"])
+                   for p, t in reflect(part, slug, known_projects(c))]
             c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, upd, NOW()))
             new += checkpoint(c, got)
     return new
@@ -543,7 +545,18 @@ def ingest_export(c, path):
 
 # ---------------------------------------------------------------- learn (repos, notes, transcript backfill)
 DOC_GLOBS = ("README*", "CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md", "CHANGELOG.md", "HANDOFF.md", "docs/**/*.md", "*.md")
-DOC_MAX_CHARS = 20000
+DOC_MAX_CHARS = 20000   # a window of a document; a longer one is read in several, never cut down to its first
+
+def pieces_of(text, size):
+    """`text` in pieces of at most `size` characters, broken at a line end where there is one in the last fifth of a
+    piece. Everything is in exactly one piece: cutting a long document to its first `size` characters and then
+    recording it as read meant the rest was never offered to the Reflector again."""
+    out = []
+    while len(text) > size:
+        cut = text.rfind("\n", int(size * 0.8), size)
+        if cut <= 0: cut = size
+        out.append(text[:cut]); text = text[cut:].lstrip("\n")
+    return out + ([text] if text.strip() else [])
 
 TASK_ITEM = re.compile(r"[-*+]\s+\[[ xX]\]\s")   # `- [x] done` is a Markdown checklist, not a `[project]` tag
 
@@ -591,8 +604,8 @@ def reflect_batches(c, chunks, project, label, done=lambda name: None):
             for n, _ in buf: done(n)
             buf, size = [], 0
     with carrying(new):
-        for name, whole in chunks:
-            text = whole[:DOC_MAX_CHARS]; piece = len(f"### {name}\n{text}") + 2   # + the "\n\n" that joins it
+        for name, text in chunks:
+            piece = len(f"### {name}\n{text}") + 2   # + the "\n\n" that joins it
             if size + piece > budget: flush()
             buf.append((name, text)); size += piece
         flush()
@@ -621,8 +634,14 @@ def take_docs(c, files, key_of, name_of):
         tagged, rest = split_tagged(text)
         if cur != f"tagged:{h}": new += [upsert(c, pr, t) for pr, t in tagged]
         set_cursor(c, key, f"tagged:{h}" if rest else h)
-        if rest: prose.append((name_of(f), rest)); pending[name_of(f)] = (key, h)
-    return new, prose, lambda name: set_cursor(c, *pending[name])
+        parts = pieces_of(rest, DOC_MAX_CHARS)
+        for i, part in enumerate(parts, 1):
+            name = name_of(f) if len(parts) == 1 else f"{name_of(f)} (part {i} of {len(parts)})"
+            prose.append((name, part))
+        if parts: pending[prose[-1][0]] = (key, h)   # read only once its last piece has been
+    def done(name):
+        if name in pending: set_cursor(c, *pending[name])
+    return new, prose, done
 
 def learn_repo(c, path, since=None):
     """Commit messages since the last seen hash, plus docs whose content hash changed. One Reflector batch per window;

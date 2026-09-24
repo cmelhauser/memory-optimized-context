@@ -91,6 +91,15 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A document longer than `DOC_MAX_CHARS` was cut to its first 20,000 characters, and its cursor
+  was then set as though all of it had been read, so the rest was never offered to the Reflector
+  again. A long document is now read in pieces, broken at a line end, and marked read only once
+  its last piece has been. `test_a_long_document_is_read_in_full_and_marked_read_only_when_it_is`,
+  `test_a_document_whose_last_piece_went_unanswered_is_offered_again`.
+- An exported conversation longer than 30,000 characters kept only its tail, through the cut in
+  `reflect`, and was then marked fully read. It is windowed like a transcript.
+  `test_a_long_exported_conversation_keeps_more_than_its_tail`.
+
 - A writer waiting for the lock asked how old it was, and the holder could release in the moment
   between that writer's failed `mkdir` and its `stat`. The `FileNotFoundError` reached the caller:
   for a Stop hook, a lost run. A lock that vanishes mid-check now simply means "try again".
