@@ -101,7 +101,17 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(id UNINDEXED, project UNINDEXE
 CREATE TABLE IF NOT EXISTS sources(key TEXT PRIMARY KEY, cursor TEXT, seen TEXT);
 """
 
+@contextmanager
 def db():
+    """A connection, committed on success and rolled back on an exception, and closed either way. `with
+    sqlite3.connect(...)` alone ends the transaction but keeps the handle: the CLI gets away with that because the
+    process ends, while the MCP server runs for as long as the editor does and opens one per tool call."""
+    c = connect()
+    try:
+        with c: yield c
+    finally: c.close()
+
+def connect():
     ROOT.mkdir(parents=True, exist_ok=True); DB.parent.mkdir(parents=True, exist_ok=True)
     c = sqlite3.connect(DB, timeout=30)
     c.execute("PRAGMA journal_mode=WAL"); c.executescript(SCHEMA); c.row_factory = sqlite3.Row
@@ -246,7 +256,9 @@ def embed_missing(c):
 
 # ---------------------------------------------------------------- search (hybrid, RRF)
 def fts_query(q):
-    toks = re.findall(r"[A-Za-z0-9_.\-]+", q)
+    """The query as FTS5 tokens. `\\w` under Unicode, because ASCII-only tokens cut an accented word down to a stump
+    that matches nothing: a lesson could not be found by its own words, and `reconcile` never saw it as a duplicate."""
+    toks = re.findall(r"[\w.\-]+", q, re.UNICODE)
     return " OR ".join(f'"{t}"' for t in toks) if toks else '""'
 
 def search(c, q, project=None, k=8, include_archived=False):
@@ -298,7 +310,13 @@ def stopping(new):
     except ReflectorFailed as e:
         new += e.new; failed.append(e)
 
-BUDGET = {"max": None, "used": 0}   # `learn --max-calls`: a reflection costs 1, plus 1 per lesson for its contradiction check
+BUDGET = {"max": None, "used": 0}   # `learn --max-calls`: every Reflector call, a reflection or a contradiction check
+
+def spend():
+    """Charge one Reflector call. Counting what is actually asked, rather than one per reflection plus one per lesson
+    for the checks it might need, stops a budget buying far less than it is given: a lesson already in the store, or
+    one with nothing to compare against, costs no check at all."""
+    BUDGET["used"] += 1
 
 def reflect(text, default_project, known_projects):
     """Lessons in text. [] when there is nothing to read or MEMORY_LLM=none; ReflectorFailed when no answer came, or
@@ -313,10 +331,10 @@ def reflect(text, default_project, known_projects):
         if CFG["llm"] == "none": return []
         why, REFLECTOR["why"] = REFLECTOR["why"] or "the log line above says why", ""   # never report a stale reason
         raise ReflectorFailed(f"the Reflector gave no answer: {why}")
+    spend()
     items = parse_json(out) or []
-    found = [(as_project(i.get("project") or default_project, default_project), str(i["text"])) for i in items if isinstance(i, dict) and i.get("text")]
-    BUDGET["used"] += 1 + len(found)
-    return found
+    return [(as_project(i.get("project") or default_project, default_project), str(i["text"]))
+            for i in items if isinstance(i, dict) and i.get("text")]
 
 def known_projects(c):
     return {r[0] for r in c.execute("SELECT DISTINCT project FROM lessons")}
@@ -331,6 +349,8 @@ def reconcile(c, new_id):
     r = c.execute("SELECT * FROM lessons WHERE id=?", (new_id,)).fetchone()
     cands = [x for x in search(c, r["text"], r["project"], k=6) if x["id"] != new_id]
     if not cands: return
+    if BUDGET["max"] is not None and BUDGET["used"] >= BUDGET["max"]: return   # the next run checks this one
+    spend()
     out = parse_json(llm(f"NEW: {r['text']}\nCANDIDATES:\n" + "\n".join(f"{x['id']}: {x['text']}" for x in cands), CONTRA_SYS, 300))
     if not isinstance(out, dict): out = {}   # an answer shaped as an array is no verdict, not a crash mid-run
     for sid in out.get("same", []):

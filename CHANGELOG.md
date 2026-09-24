@@ -91,6 +91,20 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- `fts_query` kept only ASCII word characters, so an accented or non-Latin word was cut to a stump
+  that matched nothing: a lesson could not be found by its own words, by `search`, by MCP recall,
+  or by the contradiction check that would have seen it as a duplicate. Tokens are now `\\w` under
+  Unicode. `test_a_lesson_with_an_accent_can_be_found_by_its_own_words`.
+- `--max-calls` charged one call per reflection plus one per lesson returned, for contradiction
+  checks that mostly never happen: a lesson already in the store, or one with nothing to compare
+  against, costs no check. A budget of 60 therefore bought a fraction of the work it was given.
+  Every Reflector call is now counted where it is made, `reconcile` included, and a check that
+  would exceed the budget is left for the next run.
+  `test_the_budget_counts_the_calls_it_actually_makes`.
+- `db()` ended its transaction but never closed the connection. The CLI got away with it because
+  the process ends; the MCP server runs for as long as the editor does and opens one per tool
+  call. `test_a_database_handle_is_closed_when_its_block_ends`.
+
 - A `learn` run was a single transaction: every lesson and every cursor it had earned was
   discarded if anything interrupted it — a crash, a reboot, the machine sleeping, a Ctrl-C. An
   overnight backfill once held the store for ten hours and saved none of it. Each source is now

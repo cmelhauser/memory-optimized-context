@@ -15,7 +15,7 @@ start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.1.0`. 97 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.1.0`. 100 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. Not yet run against a real store.
@@ -203,8 +203,8 @@ part-way with work done, run it again to carry on, **2** the Reflector answered 
 so running it again will not help until whatever it reported is fixed. An expired `claude` login
 reads as 2.
 
-`--max-calls N` caps one run at about N Reflector calls: each reflection counts one, plus one for
-each lesson it returns, for the contradiction check it will need. The run stops the same way, so a
+`--max-calls N` caps one run at N Reflector calls, counting each one where it is made: a
+reflection, and a contradiction check when a new lesson has neighbours worth comparing it against. The run stops the same way, so a
 first backfill can be spread out, for example `learn --transcripts --max-calls 60` every few hours.
 
 ```bash
@@ -277,7 +277,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       97 tests, six-process concurrency test included
+tests/test_memory.py       100 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it

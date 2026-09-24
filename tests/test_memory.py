@@ -1489,6 +1489,70 @@ def test_transcripts_from_reads_a_folder_you_name(m, tmp_path, monkeypatch):
         assert [r[0] for r in c.execute("SELECT DISTINCT project FROM lessons")] == ["archive"]
 
 
+# ------------------------------------------------------------------ recall, budget and handles
+
+
+def test_a_lesson_with_an_accent_can_be_found_by_its_own_words(m):
+    """ASCII-only tokens cut an accented word to a stump that matches nothing, so the lesson was unfindable by
+    search, by MCP recall, and by the contradiction check that would have spotted it as a duplicate."""
+    with m.db() as c:
+        m.upsert(c, "proj", "prefer café-au-lait naming in the Überwachung module")
+        m.upsert(c, "proj", "the naïve merge loses the second author")
+        c.commit()
+        assert [r["text"] for r in m.search(c, "café", "proj")][:1] == ["prefer café-au-lait naming in the Überwachung module"]
+        assert [r["text"] for r in m.search(c, "Überwachung", "proj")][:1] == ["prefer café-au-lait naming in the Überwachung module"]
+        assert [r["text"] for r in m.search(c, "naïve", "proj")][:1] == ["the naïve merge loses the second author"]
+    assert m.fts_query("café Überwachung") == '"café" OR "Überwachung"'
+
+
+def test_the_budget_counts_the_calls_it_actually_makes(m, tmp_path, monkeypatch, capsys):
+    """A reflection used to charge one call plus one per lesson for the checks it might need. Most of those checks
+    never happen — a lesson already in the store, or one with nothing to compare against, costs nothing — so a
+    budget of 60 bought a fraction of the work it was given."""
+    calls = []
+    def counting_llm(prompt, system=m.REFLECT_SYS, *a, **k):
+        calls.append(prompt)
+        if system == m.CONTRA_SYS: return '{"same": [], "contradicts": []}'
+        return json.dumps([{"project": "proj", "text": f"lesson {len(calls)} from the window"}])
+    monkeypatch.setattr(m, "llm", counting_llm)
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    root = tmp_path / "projects"
+    for i in range(8):
+        (root / f"-x-p{i}").mkdir(parents=True)
+        transcript(root / f"-x-p{i}" / "s.jsonl", [("user", f"turn {i}"), ("assistant", "noted")], cwd=f"/x/p{i}")
+    m.BUDGET.update(max=5, used=0)
+    with m.db() as c, pytest.raises(m.ReflectorFailed, match="budget of 5 is spent"):
+        m.learn_transcripts(c, root)
+    assert len(calls) == 5 and m.BUDGET["used"] == 5      # exactly the budget, reflections and checks alike
+
+    with m.db() as c:                                     # a check that would exceed the budget waits for next time
+        m.upsert(c, "proj", "deploy with the blue script")
+        second, _ = m.upsert(c, "proj", "deploy with the green script")   # a neighbour worth comparing against
+        c.commit()
+        before = len(calls)
+        m.reconcile(c, second)
+        assert len(calls) == before                       # no call made
+        m.BUDGET.update(max=None)
+        m.reconcile(c, second)
+        assert len(calls) == before + 1                   # and with no budget set, the check happens
+
+
+def test_a_database_handle_is_closed_when_its_block_ends(m):
+    """The CLI gets away with leaving handles open because the process ends. The MCP server runs for as long as the
+    editor does and opens one per tool call."""
+    with m.db() as c:
+        m.upsert(c, "proj", "a lesson")
+    with pytest.raises(sqlite3.ProgrammingError, match=r"[Cc]losed database"):
+        c.execute("SELECT 1")
+    with pytest.raises(ValueError), m.db() as c2:        # an exception still closes it, and rolls back
+        m.upsert(c2, "proj", "not kept")
+        raise ValueError("something went wrong")
+    with pytest.raises(sqlite3.ProgrammingError):
+        c2.execute("SELECT 1")
+    with m.db() as c3:
+        assert [r[0] for r in c3.execute("SELECT text FROM lessons")] == ["a lesson"]
+
+
 # ------------------------------------------------------------------ the scripts themselves
 
 
