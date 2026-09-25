@@ -27,6 +27,15 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 BIN = REPO / "bin" / "memory"
 
 
+SLOW_ONCE = (                       # a stand-in `claude` that is too slow the first time and answers the second
+    "#!/bin/sh\n"
+    "cat >/dev/null\n"
+    "echo x >> __MARKS__\n"
+    "if [ $(wc -l < __MARKS__) -le 1 ]; then sleep 5; fi\n"
+    """printf '%s' '{"is_error":false,"subtype":"success","result":"[]"}'\n"""
+)
+
+
 def load(root, monkeypatch, **env):
     """Import bin/memory fresh with MEMORY_ROOT pointed at `root`."""
     monkeypatch.setenv("MEMORY_ROOT", str(root))
@@ -1682,6 +1691,41 @@ def test_pieces_break_at_a_line_end_where_there_is_one(m):
     assert m.pieces_of("one line", 10) == ["one line"]
     assert m.pieces_of("abcdefgh\nijklmnop\nqrstuvwx", 10) == ["abcdefgh", "ijklmnop", "qrstuvwx"]
     assert m.pieces_of("abcdefghijklmnopqrst", 10) == ["abcdefghij", "klmnopqrst"]   # no line end to break at
+
+
+# ------------------------------------------------------------------ one window is not a whole run
+
+
+def test_a_timed_out_call_is_tried_once_more(tmp_path, monkeypatch, capsys):
+    """A backfill of 323 transcripts once ended on a single timed-out window with twelve left to read. A slow window
+    is worth another go; a refusal or a usage limit is not, and is not retried."""
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    marks = tmp_path / "attempts"
+    (fake / "claude").write_text(SLOW_ONCE.replace("__MARKS__", str(marks)))
+    (fake / "claude").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    m = load(tmp_path / "r", monkeypatch, MEMORY_LLM="cli")
+    monkeypatch.setattr(m, "CLI_TIMEOUT", 0.3)
+    assert m.llm("a window that is slow the first time") == "[]"      # the second attempt answered
+    assert marks.read_text().count("x") == 2
+    assert "trying once more" in capsys.readouterr().err
+
+
+def test_a_call_that_keeps_timing_out_gives_up_and_says_so(tmp_path, monkeypatch):
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    (fake / "claude").write_text("#!/bin/sh\ncat >/dev/null\nsleep 5\n")
+    (fake / "claude").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    m = load(tmp_path / "r", monkeypatch, MEMORY_LLM="cli")
+    monkeypatch.setattr(m, "CLI_TIMEOUT", 0.3)
+    assert m.llm("a window that is always slow") is None
+    assert m.REFLECTOR["why"] == "claude -p timed out 2 times"
+    with pytest.raises(m.ReflectorFailed, match="timed out 2 times"):
+        m.reflect("some text", "proj", set())
 
 
 # ------------------------------------------------------------------ the scripts themselves

@@ -176,6 +176,8 @@ def score(r, now_ts=None):
 
 # ---------------------------------------------------------------- Claude adapter
 REFLECTOR = {"why": ""}   # why the last call gave no answer, so a stop can say it instead of "the log says why"
+CLI_TIMEOUT = 180         # seconds one `claude -p` call may take
+CLI_TRIES = 2             # a timed-out call is tried this many times; a refusal or a usage limit is not retried
 
 def no_answer(why):
     """Log why a call gave nothing and keep the reason. An unattended run's last line is often all the operator
@@ -210,12 +212,20 @@ def llm(prompt, system="You are a precise assistant. Output only what is asked."
             if mode == "sdk": return None
     if mode in ("auto", "cli") and shutil.which("claude"):
         env = {**os.environ, "MEMORY_REFLECT": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}  # hooks check MEMORY_REFLECT and exit
-        try:
-            with tempfile.TemporaryDirectory() as d:  # empty cwd → no CLAUDE.md, no project memory loaded
-                r = subprocess.run(["claude", "-p", "--model", CFG["model"], "--output-format", "json", "--no-session-persistence"],
-                                   input=f"{system}\n\n{prompt}", capture_output=True, text=True, env=env, cwd=d, timeout=180, check=False)
-        except subprocess.TimeoutExpired:
-            return no_answer("claude -p timed out")
+        attempt = 1
+        while True:
+            try:
+                with tempfile.TemporaryDirectory() as d:  # empty cwd → no CLAUDE.md, no project memory loaded
+                    r = subprocess.run(["claude", "-p", "--model", CFG["model"], "--output-format", "json", "--no-session-persistence"],
+                                       input=f"{system}\n\n{prompt}", capture_output=True, text=True, env=env, cwd=d,
+                                       timeout=CLI_TIMEOUT, check=False)
+                break
+            except subprocess.TimeoutExpired:
+                # One window taking too long is not a reason to end a run that has been reading for hours: a
+                # backfill of 323 transcripts ended on a single timeout with twelve left to read.
+                if attempt == CLI_TRIES: return no_answer(f"claude -p timed out {CLI_TRIES} times")
+                log(f"claude -p timed out; trying once more ({attempt} of {CLI_TRIES})")
+                attempt += 1
         if r.returncode != 0:
             return no_answer(f"claude -p failed: {cli_reason(r)}")
         try: res = json.loads(r.stdout)

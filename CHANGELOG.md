@@ -91,6 +91,12 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A single `claude -p` call that timed out ended the whole run. A backfill of 323 transcripts,
+  two days in, stopped on one slow window with twelve left to read. A timed-out call is now tried
+  once more before the run gives up; a refusal, a usage limit or an authentication error is not
+  retried, since trying again would only spend the same answer twice.
+  `test_a_timed_out_call_is_tried_once_more`, `test_a_call_that_keeps_timing_out_gives_up_and_says_so`.
+
 - A document longer than `DOC_MAX_CHARS` was cut to its first 20,000 characters, and its cursor
   was then set as though all of it had been read, so the rest was never offered to the Reflector
   again. A long document is now read in pieces, broken at a line end, and marked read only once
