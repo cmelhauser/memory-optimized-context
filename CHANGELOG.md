@@ -91,6 +91,13 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- An exported claude.ai chat was filed under a project named after its title, so an export of
+  several hundred chats would have made several hundred projects, each with a compiled file of its
+  own. A chat now defaults to `claude-ai`, the tool that held it, as a Codex session outside a
+  repository defaults to `codex`. The title travels with the text, and the Reflector is given
+  every known project, so a chat about one of them is still filed under it.
+  `test_an_exported_chat_is_filed_under_claude_ai_not_under_its_title`.
+
 - A single `claude -p` call that timed out ended the whole run. A backfill of 323 transcripts,
   two days in, stopped on one slow window with twelve left to read. A timed-out call is now tried
   once more before the run gives up; a refusal, a usage limit or an authentication error is not

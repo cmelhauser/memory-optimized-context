@@ -535,7 +535,12 @@ def export_msg_text(m):
     return "\n".join(b["text"] for b in blocks if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)).strip()
 
 def ingest_export(c, path):
-    """claude.ai data export (conversations.json). Covers web, Desktop, mobile, Cowork chats."""
+    """claude.ai data export (conversations.json). Covers web, Desktop, mobile, Cowork chats.
+
+    A chat belongs to no repository, so its default project is `claude-ai`, the tool that held it, as a Codex
+    session run outside a repository belongs to `codex`. Its title used to be the default instead, which made each
+    of several hundred chats a project of its own. The title still travels with the text, and the Reflector is
+    given every known project, so a chat about one of them is filed under it."""
     convs = json.loads(Path(path).read_text())
     new = []
     with carrying(new):
@@ -544,10 +549,10 @@ def ingest_export(c, path):
             row = c.execute("SELECT cursor FROM sources WHERE key=?", (key,)).fetchone()
             if row and row["cursor"] == upd: continue
             text = "\n\n".join(f"{m.get('sender','').upper()}: {t}" for m in cv.get("chat_messages", []) if (t := export_msg_text(m)))
-            slug = re.sub(r"[^a-z0-9]+", "-", (cv.get("name") or "all").lower()).strip("-")[:40] or "all"
+            title = f"[a claude.ai conversation: {cv['name']}]\n" if cv.get("name") else ""
             got = [upsert(c, p, t)                       # a long conversation is several windows, not just its tail
-                   for part in pieces_of(text, CFG["transcript_chars"])
-                   for p, t in reflect(part, slug, known_projects(c))]
+                   for part in pieces_of(text, CFG["transcript_chars"] - len(title))
+                   for p, t in reflect(title + part, "claude-ai", known_projects(c))]
             c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, upd, NOW()))
             new += checkpoint(c, got)
     return new

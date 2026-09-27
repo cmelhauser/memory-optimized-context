@@ -424,7 +424,8 @@ def test_export_ingest_is_idempotent_per_updated_at(m, tmp_path, monkeypatch):
         exp.write_text(json.dumps(conv))
         m.ingest_export(c, exp)
     assert len(calls) == 2
-    assert "Default project for this conversation: db-server" in calls[0]
+    assert "Default project for this conversation: claude-ai" in calls[0]    # the tool, not the title
+    assert "[a claude.ai conversation: Db Server!]" in calls[0]             # which still travels as context
 
 
 # ------------------------------------------------------------------ prune
@@ -879,7 +880,7 @@ def test_learn_all_and_cli(m, tmp_path, monkeypatch, capsys):
     m.main()
     with m.db() as c:
         projects = {r[0] for r in c.execute("SELECT DISTINCT project FROM lessons")}
-    assert projects == {"alpha", "beta", "all"}
+    assert projects == {"alpha", "claude-ai", "all"}    # the chat named "Beta" belongs to the tool, not to a project "beta"
     assert (m.COMPILED / "PLAYBOOK.md").read_text() == "- (1) from notes\n"
     m.main.__globals__["sys"].argv = ["memory", "learn", "--repo", str(repos / "alpha"), "--transcripts"]
     m.main()
@@ -1726,6 +1727,40 @@ def test_a_call_that_keeps_timing_out_gives_up_and_says_so(tmp_path, monkeypatch
     assert m.REFLECTOR["why"] == "claude -p timed out 2 times"
     with pytest.raises(m.ReflectorFailed, match="timed out 2 times"):
         m.reflect("some text", "proj", set())
+
+
+# ------------------------------------------------------------------ a chat is not a project
+
+
+def test_an_exported_chat_is_filed_under_claude_ai_not_under_its_title(m, tmp_path, monkeypatch):
+    """Several hundred chats would otherwise have become several hundred projects, one compiled file apiece. The
+    title still reaches the Reflector, which is given every known project and files a chat about one under it."""
+    prompts = []
+    def reflector(prompt, *a, **k):
+        prompts.append(prompt)
+        if "hurricane" in prompt: return json.dumps([{"project": "storm-model", "text": "use the 1950 onward catalogue"}])
+        return json.dumps([{"text": "prefers answers without preamble"}])           # no project: the default
+    monkeypatch.setattr(m, "llm", reflector)
+    with m.db() as c:
+        m.upsert(c, "storm-model", "a lesson that makes storm-model a known project")
+        c.commit()
+    export = tmp_path / "conversations.json"
+    export.write_text(json.dumps([
+        {"uuid": "a", "name": "Help with a cover letter", "updated_at": "1",
+         "chat_messages": [{"sender": "human", "text": "keep it short"}]},
+        {"uuid": "b", "name": "Hurricane catalogue question", "updated_at": "1",
+         "chat_messages": [{"sender": "human", "text": "which hurricane years should we use?"}]},
+        {"uuid": "c", "updated_at": "1", "chat_messages": [{"sender": "human", "text": "an untitled chat"}]}]))
+    with m.db() as c:
+        m.ingest_export(c, export)
+        c.commit()
+        filed = {r["text"]: r["project"] for r in c.execute("SELECT project, text FROM lessons")}
+    assert filed["prefers answers without preamble"] == "claude-ai"
+    assert filed["use the 1950 onward catalogue"] == "storm-model"
+    assert "[a claude.ai conversation: Help with a cover letter]" in prompts[0]
+    assert "storm-model" in prompts[0].split("\n")[0]                                  # every known project is offered
+    assert "[a claude.ai conversation:" not in prompts[2]                                # untitled: no empty header
+    assert not any(p.name.startswith("help-with") for p in (m.COMPILED / "projects").glob("*.md"))
 
 
 # ------------------------------------------------------------------ the scripts themselves

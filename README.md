@@ -15,7 +15,7 @@ start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.1.0`. 110 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.1.0`. 111 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. Not yet run against a real store.
@@ -231,7 +231,8 @@ path separator only by what exists on disk.
 
 Chats in Claude Desktop and the iOS and Android apps live in your account rather than on the
 machine. Request a data export from claude.ai, put `conversations.json` in `~/memory/exports/`,
-and `learn --all` reads them.
+and `learn --all` reads them. A chat is filed under `claude-ai` unless the Reflector recognises
+it as being about one of your projects; its title goes along as context, not as a project name.
 
 ## Commands
 
@@ -278,7 +279,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       110 tests, six-process concurrency test included
+tests/test_memory.py       111 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
