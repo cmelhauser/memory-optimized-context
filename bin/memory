@@ -612,8 +612,10 @@ def html_text(s):
     return html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"(?i)<br\s*/?>|</(?:p|div|li|h\d|pre|tr)>", "\n", s))).strip()
 
 def instant(stamp):
-    """A Takeout timestamp as an aware datetime, or None for one that is not a timestamp."""
-    try: t = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    """A Takeout timestamp as an aware datetime, or None for one that is not a timestamp. Its fraction of a second is
+    made six digits first: Python 3.10 reads only three or six, and would take `…:05.5Z` for no time at all."""
+    stamp = re.sub(r"\.(\d+)", lambda f: "." + f[1][:6].ljust(6, "0"), str(stamp).replace("Z", "+00:00"), count=1)
+    try: t = datetime.fromisoformat(stamp)
     except ValueError: return None
     return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
 

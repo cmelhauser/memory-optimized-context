@@ -1895,6 +1895,8 @@ def test_an_export_of_an_unknown_shape_is_read_as_claude_ai(m):
 def test_takeout_times_and_html_are_read_plainly(m):
     assert m.instant("not a time") is None and m.instant(None) is None
     assert m.instant("2026-01-01T00:00:00").tzinfo is not None                # no zone: taken as UTC
+    assert m.instant("2026-01-01T00:00:00.5Z") == m.instant("2026-01-01T00:00:00.500Z")    # any number of digits
+    assert m.instant("2026-01-01T00:00:00.1234567Z") == m.instant("2026-01-01T00:00:00.123456+00:00")
     assert m.html_text("<ul><li>one</li><li>two &lt;3</li></ul>") == "one\ntwo <3"
 
 
