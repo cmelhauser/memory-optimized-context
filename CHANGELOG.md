@@ -103,6 +103,11 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- Every new lesson with a neighbour cost two contradiction checks: each source's lessons were
+  reconciled as it was committed, and `learn` then reconciled the whole run's lessons again at
+  the end. Once a `--max-calls` budget was spent, that second pass recorded every lesson of the
+  run as owed, so the next batch paid for them a third time. A run now handles each lesson once.
+  `test_a_new_lesson_is_checked_for_contradictions_once_per_run`.
 - A contradiction check that got no answer, or that `--max-calls` left for later, was skipped for
   good: the new lesson stayed active and was never compared with anything. A usage limit that
   hit mid-run left several hundred such lessons. The check is now owed, as a `recheck:<id>` row

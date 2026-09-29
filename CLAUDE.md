@@ -28,6 +28,7 @@ before editing either.
   present in `search --all`.
 - No cursor moves past text the Reflector did not answer. A resumed `learn` sends each
   transcript turn, commit and doc to the Reflector once, and counts a doc's tagged lines once.
+  A run asks each new lesson's contradiction check at most once.
 - A Claude Code transcript's project is the `cwd` recorded in it, through `project_of()`, the
   same slug for the Stop hook and the backfill; a Claude Code worktree counts as its repository.
   A Cursor, agent-mode or Codex session is filed under the repository it ran in, through

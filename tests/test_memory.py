@@ -1445,6 +1445,23 @@ def test_no_llm_by_choice_owes_no_checks(m):
         assert m.reconcile(c, new) is True and m.cursor(c, m.RECHECK + new) is None
 
 
+def test_a_new_lesson_is_checked_for_contradictions_once_per_run(m, tmp_path, monkeypatch):
+    """Each source's lessons are reconciled as it is committed, and the command reconciled the whole run's lessons
+    again at the end, so every new lesson with a neighbour cost two contradiction checks. Under a `--max-calls`
+    budget the second pass also recorded every one of them as owed, and the next batch paid them all again."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))                  # this machine's own transcripts stay unread
+    d = tmp_path / "home" / ".claude" / "projects" / "-home-me-GitHub-alpha"
+    d.mkdir(parents=True)
+    transcript(d / "s1.jsonl", [("user", "when do deploys go out?"), ("assistant", "tuesdays")], cwd="/home/me/GitHub/alpha")
+    with m.db() as c:
+        m.upsert(c, "alpha", "lesson from transcript, said before"); c.commit()
+    calls = []
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    monkeypatch.setattr(sys, "argv", ["memory", "learn", "--transcripts"])
+    m.main()
+    assert len([p for p in calls if "CANDIDATES:" in p]) == 1
+
+
 def test_remember_saves_the_whole_lesson_or_says_why_it_cannot(m, tmp_path, monkeypatch, capsys):
     """The journal is read back with LESSON_RE, so a slug it does not match, or a second line, would vanish after
     the caller was told the lesson was saved."""

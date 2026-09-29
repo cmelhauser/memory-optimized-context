@@ -400,6 +400,7 @@ def reconcile(c, new_id):
     no answer came, or a `--max-calls` budget is spent. The lesson stays active meanwhile, and a `recheck:<id>` row in
     `sources` holds the debt until `recheck_owed` pays it. Such a check used to be skipped for good: a usage limit
     that hit mid-run left hundreds of lessons active and never compared with anything."""
+    HANDLED.add(new_id)
     r = c.execute("SELECT * FROM lessons WHERE id=?", (new_id,)).fetchone()
     cands = [x for x in search(c, r["text"], r["project"], k=6) if x["id"] != new_id]
     if cands:
@@ -985,10 +986,16 @@ def compile_(c):
         subprocess.run(["git", "-C", str(ROOT), "commit", "-qm", f"compile {NOW()}"], capture_output=True, check=False)
     return len(rows), n_pruned
 
+HANDLED = set()   # lessons this process has reconciled, or recorded a check as owed for
+
 def post_ingest(c, new):
+    """Embed what has no embedding yet, and reconcile each new lesson this process has not already handled. Each
+    source's lessons are reconciled as it is committed, and a command's closing call is handed the whole run's again:
+    asking twice cost every new lesson two contradiction checks, and once a `--max-calls` budget was spent it
+    recorded every lesson of the run as owed, so the next batch paid them all a third time."""
     embed_missing(c)
     for i, is_new in new:
-        if is_new: reconcile(c, i)
+        if is_new and i not in HANDLED: reconcile(c, i)
 
 def checkpoint(c, got):
     """Reconcile and commit one source's lessons before reading the next. A `learn` used to be a single transaction,
