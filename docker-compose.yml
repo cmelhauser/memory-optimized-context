@@ -4,7 +4,8 @@
 # ${HOME} is interpolated by Compose from the shell that runs `docker compose up`. Every bind
 # mount uses identical paths inside and outside the container, so a transcript_path taken from
 # Claude Code's hook JSON resolves without translation. HOME is set to the same path, so that
-# Path.home() inside finds ~/.claude/projects and ~/GitHub where they are mounted.
+# Path.home() inside finds ~/.claude/projects and ~/GitHub where they are mounted. Cursor's, Codex's
+# and Claude Desktop's transcripts are not mounted; read those with a native `learn --transcripts`.
 #
 # .env is required on purpose. It holds the API key, and without a key the hooks run bin/memory
 # natively through `claude -p` instead (hooks/runner.sh); a container with no key has no Reflector.

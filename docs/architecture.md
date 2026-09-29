@@ -20,13 +20,17 @@ way.
 
 ## Data flow
 
-0. **Learn.** `memory learn --all` walks Claude Code transcripts, git repositories (commit
-   messages and docs), note folders and claude.ai, ChatGPT and Gemini exports. Each source has a cursor in the
-   `sources` table, so the walk is incremental: a commit hash, a content hash, a byte offset,
-   an `updated_at`. `[project] fact` lines anywhere are ingested without an LLM call; prose and
-   whole transcripts are windowed into ~30k-character batches for the Reflector, headers
-   counted, so nothing is cut. A transcript's project is the `cwd` recorded in it, the same slug
-   the Stop hook derives; a Claude Code worktree counts as its repository.
+0. **Learn.** `memory learn --all` walks every transcript the machine holds (Claude Code,
+   Cursor, Claude Desktop's agent mode, Codex), git repositories (commit messages and docs), note
+   folders, and claude.ai, ChatGPT and Gemini exports. Each source has a cursor in the `sources`
+   table, so the walk is incremental: a commit hash, a content hash, a byte offset, an export's
+   update time. `[project] fact` lines anywhere are ingested without an LLM call; prose,
+   transcripts and chats are windowed into ~30k-character batches for the Reflector, headers
+   counted, so nothing is cut. A Claude Code transcript's project is the `cwd` recorded in it,
+   the same slug the Stop hook derives, a worktree counting as its repository; the other tools'
+   sessions are filed under their repository, or else under the tool. An exported chat defaults
+   to its tool (`claude-ai`, `chatgpt`, `gemini`) unless the Reflector files it under a known
+   project.
 1. **Capture.** A Claude Code `Stop` or `SubagentStop` hook writes the hook JSON to a temp file,
    forks `memory hook`, and returns. `memory hook` journals any `LESSONS:` block from the last
    assistant message, then hands the transcript's new turns to the Reflector: at most two ~30k
@@ -40,7 +44,8 @@ way.
    did, and the next run resumes there.
 3. **Ingest.** Each lesson is upserted by `sha1(project | normalised text)[:10]`. An exact
    duplicate is a vote. Nothing is ever overwritten.
-4. **Reconcile.** A new lesson is compared with its six nearest neighbours in the same project.
+4. **Reconcile.** A new lesson is compared with its nearest neighbours in the same project, up
+   to six; one with none costs no call.
    `same` folds the new lesson's votes into the older one and retires the new one as `merged`.
    `contradicts` marks the older lesson `superseded` by the new one. Both stay in the database.
 5. **Prune.** `score = (votes + helpful - 2*harmful) * 0.5^(age_days/90)`. Below 0.15, or

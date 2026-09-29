@@ -5,7 +5,7 @@ name: CI
 # `lint` also runs tools/check_docs.py, so a stale count in the README fails the build.
 #
 # `lint` is its own job so a style failure reads as a style failure and reports in seconds.
-# The ruleset is narrow by design: syntax errors, pyflakes and bugbear. See ruff.toml.
+# The ruleset catches defects rather than restyling code; ruff.toml lists the rules.
 #
 # `unit-tests` runs pytest with the coverage gate in .coveragerc. Pull requests use Python 3.12
 # only; `main` and manual runs cover 3.10 through 3.13, because 3.10 is the floor the tool
@@ -13,7 +13,7 @@ name: CI
 #
 # `container` builds the image on `main` and on demand, not on pull requests. It is the one job
 # with network fetches beyond pip (the base image, apt, and the pinned wheels), so it is kept off the
-# pull-request path the same way the sibling repository keeps its PDF toolchain off it.
+# pull-request path. Run the workflow by hand on a branch to get it, and 3.10 to 3.13, before a merge.
 
 on:
   push:
@@ -42,7 +42,7 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
-      - name: Install ruff and shellcheck
+      - name: Install the development requirements
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
@@ -62,8 +62,8 @@ jobs:
       - name: Compose file is valid
         run: cp .env.example .env && HOME=/tmp docker compose config -q
 
-      # Counts stated in prose, the version, every relative link, and the absence of any
-      # host-specific path, all re-derived from the tree.
+      # Counts stated in prose, the version, every relative link, the coverage gate, and the
+      # absence of any home path or email address, all re-derived from the tree.
       - name: Documentation matches the tree
         run: python tools/check_docs.py
 

@@ -1,9 +1,9 @@
-"""Unit tests for bin/memory.
+"""Tests for bin/memory, tools/check_docs.py and tools/eval_recall.py.
 
 Every test runs against a throwaway MEMORY_ROOT. The LLM is replaced by a fake that returns
 canned JSON, so the Reflector and the contradiction check are exercised without a network.
-The one thing these tests cannot do is call Claude; `llm()` itself is covered by the
-`MEMORY_LLM=none` path and by the fake.
+The one thing these tests cannot do is call Claude; `llm()` itself runs against stand-in
+`claude` scripts on PATH and a fake `anthropic` module.
 """
 import importlib.machinery
 import importlib.util
@@ -1125,7 +1125,7 @@ def test_mcp_tools_answer_busy_while_a_learn_holds_the_lock(m, monkeypatch):
     monkeypatch.setattr(m, "LOCK_WAIT", 0.1)
     m.ROOT.mkdir(parents=True, exist_ok=True)
     m.LOCK.mkdir()
-    assert "when the running learn ends" in tools["remember"]("kept for later", "p")
+    assert "at the next session start" in tools["remember"]("kept for later", "p")
     assert tools["feedback"]("abc", True).startswith("busy")
     m.LOCK.rmdir()
     run_ingest(m)
@@ -1323,6 +1323,24 @@ def test_a_run_that_read_nothing_exits_differently_from_one_that_ran_out_of_budg
     monkeypatch.setattr(sys, "argv", ["memory", "learn", "--repo", str(repo)])
     with pytest.raises(SystemExit) as e:
         m.main()
+    assert e.value.code == 2 and "stopped early" in capsys.readouterr().err
+
+
+def test_a_run_whose_every_call_went_unanswered_exits_2_even_after_a_contradiction_check(m, tmp_path, monkeypatch, capsys):
+    """Lessons the hooks journaled while the Reflector was unreachable are ingested at the start of the next run, and
+    each one with a neighbour costs a contradiction check. Those calls went unanswered too, but they were counted as
+    calls made, so the run exited 1, "part-way, run me again", and an expired login went unreported."""
+    repo = git_repo(tmp_path / "alpha", "alpha")
+    with m.db() as c:
+        m.upsert(c, "alpha", "deploys go out on tuesdays"); c.commit()
+    journal(m, ["[alpha] deploys go out on tuesdays after the freeze"], sub="2026-09-20")
+    calls = []
+    monkeypatch.setattr(m, "llm", lambda *a, **k: calls.append(a[0]) and None)   # nothing ever answers
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    monkeypatch.setattr(sys, "argv", ["memory", "learn", "--repo", str(repo)])
+    with pytest.raises(SystemExit) as e:
+        m.main()
+    assert any("CANDIDATES:" in p for p in calls)                  # the check was asked, and went unanswered
     assert e.value.code == 2 and "stopped early" in capsys.readouterr().err
 
 

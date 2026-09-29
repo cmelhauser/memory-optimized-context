@@ -6,8 +6,8 @@
 pytest>=8.0
 pytest-cov>=5.0
 coverage>=7.4
-# Lint. The ruleset is narrow (syntax errors, pyflakes, bugbear), so a newer ruff will not
-# start failing the build on style.
+# Lint. The ruleset catches defects rather than restyling code (see ruff.toml), so a newer ruff
+# is unlikely to start failing the build on style.
 ruff>=0.6
 # Shell lint for hooks/*.sh and tools/*.sh. The wheel bundles the shellcheck binary.
 shellcheck-py>=0.10

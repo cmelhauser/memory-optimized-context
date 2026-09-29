@@ -10,7 +10,7 @@ Checks, each re-derived from the repository rather than trusted:
   5. The coverage gate in .coveragerc and the number quoted in prose agree.
   6. No tracked file contains an email address, except `noreply@anthropic.com` and the reserved
      example domains. The repository is public; contact details stay out of it.
-Exit 1 on the first class of failure found, after printing all of them.
+Exit 1 if any check failed, after printing every problem found.
 """
 import pathlib
 import re

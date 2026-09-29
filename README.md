@@ -15,10 +15,11 @@ reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.1.0`. 118 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.1.0`. 119 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
-both installs end to end against a fake Reflector. Not yet run against a real store.
+both installs end to end against a fake Reflector. It has run natively against a real store
+since 15 September 2026.
 
 ## What it does
 
@@ -172,7 +173,7 @@ database, so it is safe to run daily; a second run over an unchanged source make
 
 | Source | Flag | What is read | Cursor |
 |---|---|---|---|
-| Claude Code transcripts, all projects | `--transcripts` | every `~/.claude/projects/*/*.jsonl`, whole, in ~30k windows; project from the `cwd` recorded in the transcript, a worktree counting as its repository | byte offset per file, moved window by window |
+| Transcripts: Claude Code, Cursor, Claude Desktop's agent mode, Codex | `--transcripts [--transcripts-from DIR]` | every transcript in the folders under [What `--transcripts` reads](#what---transcripts-reads), whole, in ~30k windows; for Claude Code, the session files in `~/.claude/projects/*/`, not its subagents' | byte offset per file, moved window by window |
 | A git repository | `--repo PATH` | commit messages (`--no-merges`, oldest first), `README*`, `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `HANDOFF.md`, `docs/**/*.md`, `*.md` | last commit reflected; content hash per doc |
 | A folder of notes | `--notes DIR [--project slug]` | every `.md` and `.txt`, recursively | content hash per file |
 | claude.ai export (web, Desktop, mobile, Cowork) | `--export FILE` | `conversations.json`, both message shapes | `updated_at` per conversation |
@@ -182,7 +183,7 @@ database, so it is safe to run daily; a second run over an unchanged source make
 
 Cursor runs the hooks in `~/.claude/settings.json` too. Its agent transcripts mark a turn with
 `role` where Claude Code writes `type`, and the reader takes either, so a Cursor session's Stop
-hook learns from it. `learn --transcripts` backfills Claude Code's transcripts only. The Reflector's
+hook learns from it, and `learn --transcripts` reads Cursor's own store as well. The Reflector's
 own `claude -p` calls pass `--no-session-persistence`, so they leave no transcripts to read back,
 and a backfill skips any an older version left behind.
 
@@ -225,11 +226,12 @@ docker exec memory python3 /app/memory learn --all       # Docker
 | `~/.codex/sessions` | Codex rollouts, whose conversation is read out of the surrounding tool calls |
 | anywhere else | `--transcripts-from DIR`, for an archive or a folder you name |
 
-A session run inside a git repository is filed under that repository, whatever wrote it; the rest
-are filed under the tool that wrote them (`cursor`, `claude-desktop`, `codex`). Cursor records no
-working directory in its transcripts, so the folder name, which encoded one by turning `/` into
-`-`, is decoded against the filesystem: a repository with a hyphen in its name can be told from a
-path separator only by what exists on disk.
+A Claude Code session is filed under the folder it ran in, the `cwd` recorded in it, a worktree
+counting as its repository. A session from the other tools is filed under the git repository it
+ran in, and otherwise under the tool that wrote it (`cursor`, `claude-desktop`, `codex`). Cursor
+records no working directory in its transcripts, so the folder name, which encoded one by
+turning `/` into `-`, is decoded against the filesystem: a repository with a hyphen in its name
+can be told from a path separator only by what exists on disk.
 
 Chats in Claude Desktop and the iOS and Android apps live in your account rather than on the
 machine. Request a data export from claude.ai, put `conversations.json` in `~/memory/exports/`,
@@ -264,9 +266,14 @@ memory search "query" [--project slug] [-k 8] [--all]
 memory remember "fact" --project slug        # refuses a slug that is not a slug, and keeps every line
 memory vote <id> --helpful | --harmful       # exits non-zero if no lesson has that id
 memory ingest [--transcript PATH --project slug] [--export FILE] [--wait SECONDS]
-memory learn --all | --repo PATH | --notes DIR | --transcripts | --export FILE
+memory learn [--all [--repos DIR] [--exports DIR]] [--repo PATH [--since DATE]] [--notes DIR [--project slug]]
+             [--transcripts] [--transcripts-from DIR] [--export FILE] [--max-calls N]
 memory compile
+memory mcp [--transport stdio | http] [--port 8765]
+memory hook [--role main | sub]              # run by the hooks, not by hand
 ```
+
+`memory --help` and `memory COMMAND --help` describe every flag.
 
 ## Environment
 
@@ -278,6 +285,7 @@ memory compile
 | `MEMORY_LLM` | `auto` | `sdk` / `cli` / `none` |
 | `MEMORY_MODEL` | `claude-haiku-4-5-20251001` | reflector + contradiction check |
 | `MEMORY_EMBED` | `none` | `voyage` (`VOYAGE_API_KEY`) or `openai` (`OPENAI_API_KEY`) |
+| `MEMORY_EMBED_MODEL` | the provider's | `voyage-3.5` for Voyage, `text-embedding-3-small` for OpenAI |
 | `MEMORY_HALF_LIFE` | `90` | days |
 | `MEMORY_MAX_LINES` | `150` | per compiled file; keep under Claude Code's 200-line import cap |
 | `MEMORY_MIN_SCORE` | `0.15` | archive below this |
@@ -299,7 +307,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       118 tests, six-process concurrency test included
+tests/test_memory.py       119 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
@@ -328,7 +336,7 @@ matching the tree.
 
 ## Costs
 
-One Haiku call per session stop (the ≤ 30k chars of new transcript; two at most, when earlier stops found the lock busy) plus one per new lesson for the contradiction check. Typical day: a few cents on the API, or a negligible slice of a subscription via `claude -p`. Embeddings, if enabled: one call per new lesson.
+One Haiku call per session stop (the ≤ 30k chars of new transcript; two at most, when earlier stops found the lock busy) plus one per new lesson that has neighbours to compare it with, for the contradiction check. Typical day: a few cents on the API, or a negligible slice of a subscription via `claude -p`. Embeddings, if enabled: one call per new lesson.
 
 The first `learn --all` is the expensive run: one call per ~30k window of every transcript, commit
 log and doc set, which for months of history is hundreds of calls. On a subscription that can

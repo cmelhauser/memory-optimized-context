@@ -31,10 +31,9 @@ until the system has run against a real store for at least a month.
   filesystem, which is the only way to tell a repository's own hyphen from a path separator. It
   stops at the deepest path that exists, so a worktree since removed still names its repository.
   `test_a_folder_name_that_encoded_a_path_is_decoded_against_the_filesystem`.
-
-- `learn --max-calls N`: a run stops after about N Reflector calls, each reflection counting one
-  plus one per lesson it returns, and keeps its place like a usage-limit stop, so a first backfill
-  can be spread over days. `test_learn_max_calls_stops_cleanly_and_the_next_run_carries_on`.
+- `learn --max-calls N`: a run stops after about N Reflector calls, each reflection and each
+  contradiction check counted where it is made, and keeps its place like a usage-limit stop, so a
+  first backfill can be spread over days. `test_learn_max_calls_stops_cleanly_and_the_next_run_carries_on`.
 - `memory learn`: incremental adapters for git repositories (commit messages since the last
   seen hash, docs by content hash), note folders, a backfill of every Claude Code transcript
   under `~/.claude/projects`, and claude.ai exports in both message shapes; `--all` runs every
@@ -66,6 +65,8 @@ until the system has run against a real store for at least a month.
 ### Changed
 
 - README gives Claude Desktop's config path on Windows as well as macOS.
+- `memory --help` describes every subcommand and every flag; only `learn` had descriptions, and
+  most of the other commands' flags had none.
 - The hooks choose their runner in `hooks/runner.sh`: `MEMORY_RUNNER` if set, else the container
   when this checkout's `.env` holds an `ANTHROPIC_API_KEY`, else `bin/memory` natively with
   `claude -p`. Native was opt-in before; without a key it is now the default, because the image
@@ -102,6 +103,17 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A run whose every Reflector call went unanswered could exit 1, "part-way, run me again",
+  instead of 2, so an expired login went unreported. Lessons the hooks journaled during the
+  outage are ingested at the start of the next run, and each one with a neighbour costs a
+  contradiction check; the exit code counted those calls as made rather than as answered. It
+  now counts answers. `test_a_run_whose_every_call_went_unanswered_exits_2_even_after_a_contradiction_check`.
+- The MCP `remember` tool, when a `learn` held the lock, said the lesson would reach `compiled/`
+  when that `learn` ended; `learn` reads the journal only as it starts. It now says the lesson
+  arrives at the next session start, hook, ingest or learn.
+- Stale comments, docstrings and workflow notes: `--transcripts` and `--all` in the module
+  docstring, what `archive/` and the journal hold, the exit codes, the lint ruleset, what
+  `check_docs.py` checks, what the container does not mount, and the prose counts of lines.
 - A JSON file in `exports/` that is no conversation export stopped `learn --all` on every run:
   the manifest that comes with a claude.ai export raised `AttributeError`, and a claude.ai
   project was read as a conversation and left a cursor behind. Such a file, or a truncated one,
@@ -112,7 +124,6 @@ until the system has run against a real store for at least a month.
   repository defaults to `codex`. The title travels with the text, and the Reflector is given
   every known project, so a chat about one of them is still filed under it.
   `test_an_exported_chat_is_filed_under_claude_ai_not_under_its_title`.
-
 - A single `claude -p` call that timed out ended the whole run. A backfill of 323 transcripts,
   two days in, stopped on one slow window with twelve left to read. A timed-out call is now tried
   once more before the run gives up; a refusal, a usage limit or an authentication error is not

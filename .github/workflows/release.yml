@@ -4,7 +4,7 @@ name: Release
 # RELEASING.md held at that commit; this workflow records publicly whether the claim held and,
 # if it did, publishes the container image to GitHub Container Registry under the tag.
 #
-# It cannot make a bad tag good. It re-runs lint and the full test matrix, requires the tag to
+# It cannot make a bad tag good. It re-runs ruff, shellcheck and the full test matrix, requires the tag to
 # be annotated, and only then builds and pushes the multi-architecture image.
 
 on:

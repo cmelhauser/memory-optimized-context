@@ -40,7 +40,8 @@ bug is gone.
 
 ### Why this is pre-1.0
 
-It has not yet run against a real store for a month. Until it has, the scoring constants, the
+It has run against a real store since 15 September 2026, but not yet for a month. Until it
+has, the scoring constants, the
 150-line cap and the contradiction prompt are guesses. 1.0.0 means a month of real use has not
 required a `store/` branch.
 

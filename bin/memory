@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """
 memory — personal memory system for Claude. One file, stdlib only, Python 3.10+.
-Optional extras: `anthropic` (SDK) or `claude` CLI for reflection; `mcp` for the MCP server.
+Optional extras: `anthropic` (SDK) or `claude` CLI for reflection; `mcp` for the MCP server; `numpy` for faster
+vector ranking.
 
 Layout ($MEMORY_ROOT, default ~/memory):
   memory.db            SQLite: lessons + FTS5 (+ optional embeddings)   ← only `memory` writes this
-  journal/DATE/*.md    raw LESSONS files, one per hook event / claude.ai note (never edited)
+  journal/DATE/*.md    raw LESSONS files, one per hook event, `remember` or MCP save (never edited)
+  journal/claude-ai/   notes claude.ai writes through Google Drive, one new file each (never edited)
   compiled/            PLAYBOOK.md + projects/*.md, atomic rename       ← only `memory` writes this
-  archive/             pruned + superseded lessons, dated markdown
-  .lock/               mkdir lock; every write path takes it
+  archive/             pruned lessons, one markdown file per month
+  exports/             claude.ai, ChatGPT and Gemini exports for `learn --all`; kept out of the store's git
+  .lock/               mkdir lock; every write path takes it (.lock.break/ guards breaking a crashed holder's)
 
-Subcommands:
-  hook      called by Claude Code hooks (stdin/--input JSON): journal LESSONS, reflect transcript tail, ingest, compile
+Subcommands (`memory COMMAND --help` for every flag):
+  hook      run by the Claude Code hooks: journal a LESSONS: block, reflect the transcript from its cursor (two
+            windows at most, oldest first), ingest, compile
   ingest    journal files, --transcript PATH, --export FILE (claude.ai, ChatGPT or Gemini); --wait S caps the wait
-  learn     everything else, incrementally: --repo (commit messages + docs), --notes, --transcripts
-            (backfill ~/.claude/projects), --export; --all does all of them
+  learn     everything else, incrementally: --repo (commit messages + docs), --notes, --transcripts (Claude Code,
+            Cursor, Claude Desktop's agent mode, Codex; --transcripts-from DIR adds a folder), --export;
+            --all reads transcripts, every repo under --repos, --notes and exports/; --max-calls N caps a run
   compile   write compiled/*.md from active lessons (also prunes)
   search    hybrid FTS5 + vector, RRF
   remember  add one lesson by hand
@@ -175,7 +180,7 @@ def score(r, now_ts=None):
 
 
 # ---------------------------------------------------------------- Claude adapter
-REFLECTOR = {"why": ""}   # why the last call gave no answer, so a stop can say it instead of "the log says why"
+REFLECTOR = {"why": ""}   # why the last call gave no answer, so a stop can say it instead of "the log line above says why"
 CLI_TIMEOUT = 180         # seconds one `claude -p` call may take
 CLI_TRIES = 2             # a timed-out call is tried this many times; a refusal or a usage limit is not retried
 
@@ -351,7 +356,7 @@ def stopping(new):
     except ReflectorFailed as e:
         new += e.new; failed.append(e)
 
-BUDGET = {"max": None, "used": 0}   # `learn --max-calls`: every Reflector call, a reflection or a contradiction check
+BUDGET = {"max": None, "used": 0, "answered": 0}   # `used`: every call, for `learn --max-calls`; `answered`: for the exit code
 
 def spend():
     """Charge one Reflector call. Counting what is actually asked, rather than one per reflection plus one per lesson
@@ -372,7 +377,7 @@ def reflect(text, default_project, known_projects):
         if CFG["llm"] == "none": return []
         why, REFLECTOR["why"] = REFLECTOR["why"] or "the log line above says why", ""   # never report a stale reason
         raise ReflectorFailed(f"the Reflector gave no answer: {why}")
-    spend()
+    spend(); BUDGET["answered"] += 1
     items = parse_json(out) or []
     return [(as_project(i.get("project") or default_project, default_project), str(i["text"]))
             for i in items if isinstance(i, dict) and i.get("text")]
@@ -390,9 +395,11 @@ def reconcile(c, new_id):
     r = c.execute("SELECT * FROM lessons WHERE id=?", (new_id,)).fetchone()
     cands = [x for x in search(c, r["text"], r["project"], k=6) if x["id"] != new_id]
     if not cands: return
-    if BUDGET["max"] is not None and BUDGET["used"] >= BUDGET["max"]: return   # the next run checks this one
+    if BUDGET["max"] is not None and BUDGET["used"] >= BUDGET["max"]: return   # left unchecked, and nothing rechecks it yet
     spend()
-    out = parse_json(llm(f"NEW: {r['text']}\nCANDIDATES:\n" + "\n".join(f"{x['id']}: {x['text']}" for x in cands), CONTRA_SYS, 300))
+    raw = llm(f"NEW: {r['text']}\nCANDIDATES:\n" + "\n".join(f"{x['id']}: {x['text']}" for x in cands), CONTRA_SYS, 300)
+    if raw is not None: BUDGET["answered"] += 1
+    out = parse_json(raw)
     if not isinstance(out, dict): out = {}   # an answer shaped as an array is no verdict, not a crash mid-run
     for sid in out.get("same", []):
         if any(x["id"] == sid for x in cands):  # merge: fold votes into the older, retire the new
@@ -432,7 +439,7 @@ def ingest_journal(c):
     return new
 
 def transcript_turns(path, start=0):
-    """Claude Code or Cursor JSONL transcript → ([(turn text, byte offset just past it)], end offset). Incremental from
+    """A JSONL transcript in any shape `any_turn` reads → ([(turn text, byte offset just past it)], end offset). From
     a byte offset. A last line with no newline is still being written: it is left for the next read, not skipped."""
     out, pos = [], start
     with open(path, "rb") as f:
@@ -485,7 +492,8 @@ def reflector_transcript(path):
     return first[len("USER: "):].startswith((REFLECT_SYS[:40], CONTRA_SYS[:40]))
 
 def claude_code_turns(path, start=0):
-    """Claude Code JSONL transcript → (text, end_offset). Incremental from byte offset."""
+    """A JSONL transcript → (its turns as one text, end offset), incrementally from a byte offset. The tests' view of
+    `transcript_turns`; the readers use that, window by window."""
     turns, end = transcript_turns(path, start)
     return "\n\n".join(t for t, _ in turns), end
 
@@ -810,7 +818,8 @@ def line_cwd(raw):
     return j.get("cwd") or (pay.get("cwd") if isinstance(pay, dict) else None)
 
 def transcript_cwd(files):
-    """The first `cwd` recorded in any of these transcripts; Claude Code stamps it on every turn."""
+    """The first `cwd` recorded in any of these transcripts: Claude Code stamps it on every turn, a Codex rollout
+    once in its `session_meta` header."""
     for f in files:
         with open(f, "rb") as fh:
             cwd = next((c for c in map(line_cwd, fh) if c), None)
@@ -844,8 +853,8 @@ def claude_code_project_dirs(root=None):
         yield (project_of(cwd) if cwd else d.name.rstrip("-").rsplit("-", 1)[-1].lower() or "all"), files
 
 def machine_roots():
-    """Where this machine keeps transcripts, resolved when asked rather than at import: HOME differs between the
-    native install and the container, and it is what the tests point elsewhere."""
+    """Where this machine keeps transcripts, resolved when asked rather than at import, because HOME is what the tests
+    point elsewhere."""
     home = Path.home()
     return {"cursor": home / ".cursor" / "projects",
             "claude-desktop": home / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions",
@@ -979,13 +988,14 @@ def cmd_hook(a):
 STOPPED = "memory: {} stopped early: {}. What was read is kept and compiled; run it again to resume."
 
 def stop_early(cmd, why):
-    """Exit 1 after a run that read something, 2 after one that read nothing at all. A scheduled job can then tell
-    "I am part-way through" from "I have not worked since Friday", which no amount of re-running will fix."""
+    """Exit 1 after a run that got any answer from the Reflector, 2 after one that got none at all. A scheduled job can
+    then tell "I am part-way through" from "I have not worked since Friday", which no amount of re-running will fix.
+    Calls made are not answers: a contradiction check on a lesson journaled during an outage goes unanswered too."""
     print(STOPPED.format(cmd, why), file=sys.stderr)
-    sys.exit(1 if BUDGET["used"] else 2)
+    sys.exit(1 if BUDGET["answered"] else 2)
 
 def cmd_ingest(a):
-    BUDGET.update(used=0)
+    BUDGET.update(used=0, answered=0)
     with Lock(a.wait), db() as c:
         new = ingest_journal(c)
         with stopping(new) as failed:
@@ -1001,7 +1011,7 @@ def cmd_learn(a):
     ReflectorFailed it stops, keeps and compiles what was read, and exits non-zero; the next run resumes there."""
     missing = [r for r in a.repo or [] if not Path(r).expanduser().is_dir()]
     if missing: sys.exit(f"memory: learn --repo: no such folder: {', '.join(missing)}")   # a typo must not pass for success
-    BUDGET.update(max=a.max_calls, used=0)
+    BUDGET.update(max=a.max_calls, used=0, answered=0)
     with Lock(), db() as c:
         new = ingest_journal(c)
         with stopping(new) as failed:
@@ -1066,8 +1076,8 @@ def cmd_mcp(a):
         try:
             with Lock(), db() as c:
                 new = ingest_journal(c); post_ingest(c, new); c.commit(); compile_(c); c.commit()
-        except LockBusy:                          # the journal file is written; the next compile picks it up
-            return f"saved to {project}; it reaches compiled/ when the running learn ends"
+        except LockBusy:                          # the journal file is written; the next ingest of the journal takes it
+            return f"saved to {project}; it reaches compiled/ at the next session start, hook, ingest or learn"
         return f"saved to {project}"
 
     @srv.tool()
@@ -1089,9 +1099,18 @@ def cmd_mcp(a):
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="memory"); sp = ap.add_subparsers(dest="cmd", required=True)
-    s = sp.add_parser("hook"); s.add_argument("--role", default="main"); s.add_argument("--input"); s.add_argument("--project"); s.set_defaults(f=cmd_hook)
-    s = sp.add_parser("ingest"); s.add_argument("--transcript"); s.add_argument("--project"); s.add_argument("--export")
+    ap = argparse.ArgumentParser(prog="memory", description="Long-term memory for Claude: learn lessons from sessions, "
+                                 "repositories, notes and exports; compile them for every session to read.")
+    sp = ap.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
+    s = sp.add_parser("hook", help="run by the Claude Code hooks: journal a LESSONS: block, reflect the new turns, compile")
+    s.add_argument("--role", default="main", help="main or sub, for the Stop or SubagentStop hook (default main)")
+    s.add_argument("--input", help="the hook's JSON in a file (default: read it from stdin)")
+    s.add_argument("--project", help="project slug (default: from the session's working directory)")
+    s.set_defaults(f=cmd_hook)
+    s = sp.add_parser("ingest", help="fold in new journal files, and optionally one transcript or export; then compile")
+    s.add_argument("--transcript", help="a transcript to reflect from its cursor, two windows at most")
+    s.add_argument("--project", help="project slug for --transcript (default all)")
+    s.add_argument("--export", help="an export: claude.ai or ChatGPT conversations.json, or Takeout's Gemini Apps MyActivity.json")
     s.add_argument("--wait", type=float, default=LOCK_WAIT, help="seconds to wait for the lock (the SessionStart hook passes 2)")
     s.set_defaults(f=cmd_ingest)
     s = sp.add_parser("learn", help="read repos, notes, transcripts and exports; only what changed since last time")
@@ -1108,14 +1127,27 @@ def main():
     s.add_argument("--exports", help="folder of exports for --all (default $MEMORY_ROOT/exports)")
     s.add_argument("--max-calls", type=int, help="stop after about N Reflector calls, contradiction checks included; the next run carries on")
     s.set_defaults(f=cmd_learn)
-    s = sp.add_parser("compile"); s.set_defaults(f=cmd_compile)
-    s = sp.add_parser("search"); s.add_argument("query"); s.add_argument("--project"); s.add_argument("-k", type=int, default=8)
-    s.add_argument("--all", action="store_true"); s.set_defaults(f=cmd_search)
-    s = sp.add_parser("remember"); s.add_argument("text"); s.add_argument("--project", default="all"); s.set_defaults(f=cmd_remember)
-    s = sp.add_parser("vote"); s.add_argument("id"); g = s.add_mutually_exclusive_group(required=True)
-    g.add_argument("--helpful", action="store_true"); g.add_argument("--harmful", action="store_true"); s.set_defaults(f=cmd_vote)
-    s = sp.add_parser("mcp"); s.add_argument("--transport", choices=["stdio", "http"], default="stdio")
-    s.add_argument("--port", type=int, default=8765); s.set_defaults(f=cmd_mcp)
+    s = sp.add_parser("compile", help="write compiled/*.md from the active lessons, pruning and archiving as it goes")
+    s.set_defaults(f=cmd_compile)
+    s = sp.add_parser("search", help="find lessons by keyword, and by meaning when embeddings are on")
+    s.add_argument("query", help="words to look for")
+    s.add_argument("--project", help="only this project's lessons, and those for all")
+    s.add_argument("-k", type=int, default=8, help="how many to return (default 8)")
+    s.add_argument("--all", action="store_true", help="include superseded and archived lessons")
+    s.set_defaults(f=cmd_search)
+    s = sp.add_parser("remember", help="save one lesson by hand")
+    s.add_argument("text", help="the lesson, one line")
+    s.add_argument("--project", default="all", help="project slug (default all)")
+    s.set_defaults(f=cmd_remember)
+    s = sp.add_parser("vote", help="mark a lesson helpful or harmful; harmful twice archives it")
+    s.add_argument("id", help="the lesson's id, as search prints it")
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--helpful", action="store_true"); g.add_argument("--harmful", action="store_true")
+    s.set_defaults(f=cmd_vote)
+    s = sp.add_parser("mcp", help="serve recall, remember and feedback over MCP")
+    s.add_argument("--transport", choices=["stdio", "http"], default="stdio", help="stdio for Claude Desktop, http for the container (default stdio)")
+    s.add_argument("--port", type=int, default=8765, help="port for --transport http (default 8765)")
+    s.set_defaults(f=cmd_mcp)
     a = ap.parse_args(); a.f(a)
 
 if __name__ == "__main__":

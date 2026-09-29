@@ -28,8 +28,10 @@ before editing either.
   present in `search --all`.
 - No cursor moves past text the Reflector did not answer. A resumed `learn` sends each
   transcript turn, commit and doc to the Reflector once, and counts a doc's tagged lines once.
-- A transcript's project is the `cwd` recorded in it, through `project_of()`, the same slug for
-  the Stop hook and the backfill; a Claude Code worktree counts as its repository.
+- A Claude Code transcript's project is the `cwd` recorded in it, through `project_of()`, the
+  same slug for the Stop hook and the backfill; a Claude Code worktree counts as its repository.
+  A Cursor, agent-mode or Codex session is filed under the repository it ran in, through
+  `repo_of()`, and otherwise under its tool.
 - A writer that cannot get the lock raises `LockBusy`; the MCP tools answer "busy" and the
   server keeps running.
 - A lock holder touches `.lock` every 60 s, and only a lock untouched for 600 s is broken as a
@@ -59,6 +61,10 @@ before editing either.
   be one compile behind when a session starts.
 - A Reflector answer with no JSON array in it counts as "no lessons", not as a failure, so one
   odd answer cannot stall a backfill.
+- An exported chat is filed under its tool (`claude-ai`, `chatgpt`, `gemini`), not under a
+  project named after its title, unless the Reflector recognises one of the known projects in it.
+- A JSON file in `exports/` that is none of the three exports, such as the manifest that comes
+  with a claude.ai export, is logged and skipped by `learn --all`.
 - A Stop hook reads at most two windows of new transcript. A session that outran its stops while
   the lock was busy is caught up by its next stops or by `learn --transcripts`; its cursor never
   moves past what was read.

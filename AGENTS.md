@@ -6,12 +6,12 @@ two overlap.
 
 ## What this project is
 
-A single-file personal memory system for Claude. `bin/memory` (about 740 lines, standard
+A single-file personal memory system for Claude. `bin/memory` (about 1,100 lines, standard
 library only) owns a SQLite store, an append-only journal, a locked compiler, a Reflector that
-calls Claude to extract lessons from transcripts, a contradiction check, a pruner, hybrid
-search, and an MCP server. Two shell hooks, sharing `hooks/runner.sh`, connect it to Claude
+calls Claude to extract lessons from transcripts, commits, docs and chat exports, a
+contradiction check, a pruner, hybrid search, and an MCP server. Two shell hooks, sharing `hooks/runner.sh`, connect it to Claude
 Code. It runs natively by default, reflecting through `claude -p`; a Dockerfile and Compose file
-run it in a container when an API key is configured. One hundred and eighteen tests cover it
+run it in a container when an API key is configured. One hundred and nineteen tests cover it
 at 100 per cent of lines and branches, including a six-process concurrency test, and
 `tools/e2e.sh` runs both installs end to end against a fake Reflector.
 

@@ -55,7 +55,7 @@ cleanup() {
 trap cleanup EXIT
 for _ in $(seq 1 50); do "$PY" -c "import socket; socket.create_connection(('127.0.0.1', $PORT), 1)" 2>/dev/null && break; sleep 0.1; done
 if [ ! -x "$VENV/bin/python3" ]; then
-  read -r -a pins <<<"$(grep -oE '(anthropic|mcp)==[0-9.]+' "$REPO/Dockerfile" | tr '\n' ' ')"   # the image's pins
+  read -r -a pins <<<"$(grep -oE '(anthropic|mcp)==[0-9.]+' "$REPO/Dockerfile" | tr '\n' ' ')"   # the image's anthropic and mcp pins
   if ! { "$PY" -m venv "$VENV" && "$VENV/bin/pip" install -q "${pins[@]}"; }; then echo "FAIL could not build the venv"; exit 1; fi
 fi
 
@@ -76,7 +76,7 @@ stop_json "$H/GitHub/doc-ingestion/.claude/worktrees/fervent-fermat-15cf91" "${w
 wait_for "$H/memory/hook.log" "hook main:"
 check "native-cli: the Stop hook ran bin/memory under Python 3.10+ (no traceback)" "grep -q 'hook main:' '$H/memory/hook.log' && ! grep -q Traceback '$H/memory/hook.log'"
 check "native-cli: the LESSONS block was journaled and compiled" "grep -q 'journaled through the native hook' '$H/memory/compiled/PLAYBOOK.md'"
-check "native-cli: the worktree's tail was reflected by claude -p, under doc-ingestion" "grep -q 'cli lesson for doc-ingestion' '$H/memory/compiled/projects/doc-ingestion.md'"
+check "native-cli: the worktree's transcript was reflected by claude -p, under doc-ingestion" "grep -q 'cli lesson for doc-ingestion' '$H/memory/compiled/projects/doc-ingestion.md'"
 check "native-cli: claude -p was asked for JSON from claude-haiku-4-5-20251001" "grep -q '\"--output-format\", \"json\"' '$W/cli2.log' && grep -q claude-haiku-4-5-20251001 '$W/cli2.log'"
 "${NATIVE[@]}" bash "$W/native/hooks/compile.sh" </dev/null
 check "native-cli: the SessionStart hook ran ingest" "grep -q 'ingest:' '$H/memory/hook.log'"

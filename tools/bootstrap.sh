@@ -2,8 +2,8 @@
 # One-time: create ~/GitHub/memory-optimized-context from this folder and publish it as a public
 # GitHub repository under the current `gh` login. Requires `gh auth login` to have been run.
 #
-#   bash bootstrap.sh            create + push
-#   bash bootstrap.sh --dry-run  show what would happen
+#   bash tools/bootstrap.sh            create + push
+#   bash tools/bootstrap.sh --dry-run  show what would happen
 set -euo pipefail
 src="$(cd "$(dirname "$0")/.." && pwd)"
 dest="$HOME/GitHub/memory-optimized-context"
