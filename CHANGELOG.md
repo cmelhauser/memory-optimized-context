@@ -9,6 +9,17 @@ until the system has run against a real store for at least a month.
 
 ### Added
 
+- `--export` reads ChatGPT's `conversations.json` and the Gemini Apps activity in a Google
+  Takeout, besides claude.ai's, and tells the three apart by their shape, so `learn --all` reads
+  whatever is in `exports/`. A ChatGPT chat is read along the branch that was on screen, from
+  `current_node` to the root, and not the answers an edit or a regeneration replaced; hidden
+  context, tool output and the system prompt are left out. It is filed under `chatgpt` and read
+  again when its `update_time` changes. Gemini's activity has no conversations, so it is read in
+  time order, in windows, under `gemini`, with one cursor at the last record read; records made
+  at the same instant stay in one window, so a resume can skip neither.
+  `test_a_chatgpt_export_is_read_along_the_branch_on_screen`,
+  `test_gemini_takeout_activity_is_read_in_time_order_and_only_once`,
+  `test_a_gemini_window_left_unanswered_is_offered_again`.
 - `learn --transcripts` reads every transcript the machine holds, not only Claude Code's:
   Cursor's own store including each session's subagents, Claude Desktop's agent-mode sessions, and
   Codex rollouts, whose conversation is read out of the tool calls, reasoning and world state

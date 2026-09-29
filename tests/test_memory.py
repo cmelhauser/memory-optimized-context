@@ -1763,6 +1763,141 @@ def test_an_exported_chat_is_filed_under_claude_ai_not_under_its_title(m, tmp_pa
     assert not any(p.name.startswith("help-with") for p in (m.COMPILED / "projects").glob("*.md"))
 
 
+def chatgpt_node(parent, role, content, hidden=False):
+    meta = {"is_visually_hidden_from_conversation": True} if hidden else {}
+    return {"parent": parent, "message": {"author": {"role": role}, "content": content, "metadata": meta}}
+
+
+def test_a_chatgpt_export_is_read_along_the_branch_on_screen(m, tmp_path, monkeypatch):
+    """ChatGPT keeps every edit and regenerated answer as a branch of a tree. Only the branch that ends at
+    `current_node` is the conversation as it was left; the others, the system prompt, tool output and hidden
+    context are not what was said."""
+    calls = []
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    conv = {"conversation_id": "c1", "title": "Tabs or spaces", "update_time": 1700000000.5, "current_node": "a2",
+            "mapping": {
+                "root": {"parent": None, "message": None},
+                "sys": chatgpt_node("root", "system", {"content_type": "text", "parts": ["You are ChatGPT"]}),
+                "ctx": chatgpt_node("sys", "user", {"content_type": "user_editable_context", "user_instructions": "x"}, hidden=True),
+                "u1": chatgpt_node("ctx", "user", {"content_type": "multimodal_text", "parts": [{"asset": "img"}, "indent with spaces"]}),
+                "a1": chatgpt_node("u1", "assistant", {"content_type": "text", "parts": ["the abandoned answer"]}),
+                "tool": chatgpt_node("u1", "tool", {"content_type": "execution_output", "text": "tool output"}),
+                "code": chatgpt_node("tool", "assistant", {"content_type": "code", "text": "print('four spaces')"}),
+                "a2": chatgpt_node("code", "assistant", {"content_type": "text", "parts": ["four spaces, then"]})}}
+    export = tmp_path / "conversations.json"
+    export.write_text(json.dumps([conv]))
+    with m.db() as c:
+        assert len(m.ingest_export(c, export)) == 1
+        assert m.ingest_export(c, export) == []                            # unchanged: no call at all
+    sent = [p for p in calls if "<conversation>" in p]
+    assert len(sent) == 1
+    said = sent[0].split("<conversation>\n", 1)[1]
+    assert said.index("USER: indent with spaces") < said.index("ASSISTANT: print('four spaces')") < said.index("ASSISTANT: four spaces, then")
+    for absent in ("abandoned", "You are ChatGPT", "tool output", "user_instructions", "asset"):
+        assert absent not in said
+    assert "Default project for this conversation: chatgpt" in sent[0]
+    assert "[a ChatGPT conversation: Tabs or spaces]" in sent[0]
+    conv["update_time"] = 1700000999
+    export.write_text(json.dumps([conv]))
+    with m.db() as c:
+        m.ingest_export(c, export)
+        assert m.cursor(c, "chatgpt:c1") == "1700000999"
+    assert len([p for p in calls if "<conversation>" in p]) == 2           # a changed chat is read again
+
+
+def test_a_chatgpt_conversation_without_a_current_node_ends_at_its_last_message(m):
+    """An export that names no `current_node` is walked from the last message it lists; a cycle ends the walk."""
+    conv = {"mapping": {"u": chatgpt_node("a", "user", {"parts": ["first"]}),
+                        "a": chatgpt_node("u", "assistant", {"parts": ["second"]})}}
+    assert m.chatgpt_turns(conv) == ["USER: first", "ASSISTANT: second"]
+    assert m.chatgpt_turns({"mapping": {}}) == [] and m.chatgpt_turns({}) == []
+
+
+def test_a_chatgpt_conversation_is_keyed_by_id_when_it_has_no_conversation_id(m, tmp_path, monkeypatch):
+    monkeypatch.setattr(m, "llm", tracing_llm([]))
+    with m.db() as c:
+        m.ingest_chatgpt(c, [{"id": "old", "mapping": {"u": chatgpt_node(None, "user", {"parts": ["hello"]})}}])
+        assert m.cursor(c, "chatgpt:old") == ""
+
+
+def gemini(title, when, html="", header="Gemini Apps", products=("Gemini Apps",)):
+    r = {"header": header, "title": title, "time": when, "products": list(products)}
+    if html: r["safeHtmlItem"] = [{"html": html}]
+    return r
+
+
+def test_gemini_takeout_activity_is_read_in_time_order_and_only_once(m, tmp_path, monkeypatch):
+    """Takeout lists Gemini's activity newest first, one record per prompt and reply, beside other products' if
+    the whole of My Activity was exported. Each later Takeout repeats everything before it."""
+    calls = []
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    records = [
+        gemini("Prompted the latest question", "2026-03-02T09:00:00.500Z", "<p>An answer &amp; more</p><p>Second<br/>line</p>"),
+        gemini("Searched for weather", "2026-03-02T08:00:00Z", header="Search", products=["Search"]),
+        gemini("Prompted asked at the same instant", "2026-03-01T10:00:00Z"),
+        gemini("Prompted the first question", "2026-03-01T10:00:00Z", "<div>first reply</div>"),
+        gemini("Prompted from before the rename", "2024-01-05T12:00:00Z", header="Bard", products=[]),
+        gemini("Prompted with no usable time", "yesterday"),
+        gemini("", "2026-03-01T11:00:00Z"),                                  # nothing said: not a turn
+        "not a record"]
+    export = tmp_path / "gemini.json"
+    export.write_text(json.dumps(records))
+    with m.db() as c:
+        assert m.export_kind(records) == "gemini"
+        m.ingest_export(c, export)
+        stop = m.cursor(c, "gemini:activity")
+        assert m.ingest_export(c, export) == []
+    sent = [p for p in calls if "<conversation>" in p]
+    assert len(sent) == 1 and "Default project for this conversation: gemini" in sent[0]
+    said = sent[0].split("<conversation>\n", 1)[1]
+    order = ["USER: from before the rename", "USER: asked at the same instant", "USER: the first question",
+             "ASSISTANT: first reply", "USER: the latest question", "ASSISTANT: An answer & more\nSecond\nline"]
+    assert [said.index(x) for x in order] == sorted(said.index(x) for x in order)
+    assert "weather" not in said and "no usable time" not in said
+    assert m.instant(stop) == m.instant("2026-03-02T09:00:00.5Z")
+    records.insert(0, gemini("Prompted a question from the next Takeout", "2026-04-01T00:00:00Z"))
+    export.write_text(json.dumps(records))
+    with m.db() as c:
+        m.ingest_export(c, export)
+    later = [p for p in calls if "<conversation>" in p][1]
+    assert "the next Takeout" in later and "the latest question" not in later    # only what is newer
+
+
+def test_a_gemini_window_left_unanswered_is_offered_again(m, tmp_path, monkeypatch):
+    """The cursor moves after each window, to the last instant in it, and never past one the Reflector did not
+    answer. Records made at the same instant stay in one window, so resuming after that instant skips neither."""
+    records = [gemini(f"Prompted question {i:02d} " + "x" * 60, f"2026-01-01T00:00:{i:02d}Z") for i in range(8)]
+    records.append(gemini("Prompted a twin asked in the same second", "2026-01-01T00:00:03Z"))
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli", transcript_chars=200))
+    calls = []
+    monkeypatch.setattr(m, "llm", failing_llm(calls, 1))
+    with m.db() as c, pytest.raises(m.ReflectorFailed):
+        m.ingest_gemini(c, records)
+    with m.db() as c:
+        first = m.cursor(c, "gemini:activity")
+        assert first and m.instant(first) < m.instant("2026-01-01T00:00:07Z")
+        answered = calls[0]
+        monkeypatch.setattr(m, "llm", tracing_llm(calls))
+        m.ingest_gemini(c, records)
+        assert m.instant(m.cursor(c, "gemini:activity")) == m.instant("2026-01-01T00:00:07Z")
+    said = "".join(p for p in calls[1:] if "<conversation>" in p)
+    for i in range(8):
+        assert (f"question {i:02d}" in answered) != (f"question {i:02d}" in said)    # each once, none skipped
+    assert ("twin" in answered) == ("question 03" in answered) != ("twin" in said)
+
+
+def test_an_export_of_an_unknown_shape_is_read_as_claude_ai(m):
+    assert m.export_kind([]) == "claude-ai" and m.export_kind({}) == "claude-ai" and m.export_kind(["x"]) == "claude-ai"
+    assert m.export_kind([{"uuid": "u", "chat_messages": []}]) == "claude-ai"
+    assert m.export_kind([{"mapping": {}}]) == "chatgpt"
+
+
+def test_takeout_times_and_html_are_read_plainly(m):
+    assert m.instant("not a time") is None and m.instant(None) is None
+    assert m.instant("2026-01-01T00:00:00").tzinfo is not None                # no zone: taken as UTC
+    assert m.html_text("<ul><li>one</li><li>two &lt;3</li></ul>") == "one\ntwo <3"
+
+
 # ------------------------------------------------------------------ the scripts themselves
 
 

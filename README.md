@@ -9,13 +9,13 @@ See [ATTRIBUTION.md](ATTRIBUTION.md) for the authorship and rights statement, an
 [LICENSE](LICENSE) for the public-domain dedication and courtesy-credit request.
 
 One Python file, two hook scripts. No server, no vector database, no scheduler. It captures
-durable lessons from every Claude Code session and subagent, from claude.ai exports, and from
-Claude Desktop, compiles them into short markdown files every Claude surface reads at session
-start, and never lets two processes write the same file.
+durable lessons from every Claude Code session and subagent, from claude.ai, ChatGPT and Gemini
+exports, and from Claude Desktop, compiles them into short markdown files every Claude surface
+reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.1.0`. 111 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.1.0`. 118 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. Not yet run against a real store.
@@ -27,7 +27,7 @@ both installs end to end against a fake Reflector. Not yet run against a real st
 | Capture without the `LESSONS:` instruction | Stop hook passes the Claude Code transcript path; a Reflector (Claude Haiku via `claude -p` or SDK) extracts durable lessons from the turns since the last stop, oldest first. Incremental by byte offset. |
 | Capture from Desktop, web, mobile, Cowork | `memory ingest --export conversations.json` (claude.ai → Settings → Privacy → Export data). Same Reflector. Idempotent per conversation `updated_at`. Claude Desktop also gets live `remember`/`recall` via the MCP server. |
 | Semantic recall | `MEMORY_EMBED=voyage` (or `openai`). Hybrid FTS5 + cosine, fused with RRF. Off by default; keyword search alone works. numpy in the image makes ranking 5,000 lessons a ~20 ms matmul; the stdlib fallback is ~300 ms. |
-| Learn from history | `memory learn --all`: Claude Code transcripts, git commit messages and docs of every repo, notes, claude.ai exports. Incremental by cursor. |
+| Learn from history | `memory learn --all`: Claude Code transcripts, git commit messages and docs of every repo, notes, claude.ai, ChatGPT and Gemini exports. Incremental by cursor. |
 | Contradiction handling | Every new lesson is compared with its nearest neighbours in the same project. `same` → votes merge. `contradicts` → older lesson marked `superseded_by` newer. ADD-only: nothing is deleted, `search --all` still finds it. |
 | Automatic pruning | score = (votes + helpful − 2·harmful) × 0.5^(age/90d). Below threshold or harmful ≥ 2 → archived to `archive/YYYY-MM.md`, removed from compiled output, still searchable. |
 | Parallel-safe | One journal file per event (never appended). Single `mkdir` lock around every DB/compiled write. Atomic rename on output. SQLite WAL. |
@@ -176,6 +176,8 @@ database, so it is safe to run daily; a second run over an unchanged source make
 | A git repository | `--repo PATH` | commit messages (`--no-merges`, oldest first), `README*`, `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `HANDOFF.md`, `docs/**/*.md`, `*.md` | last commit reflected; content hash per doc |
 | A folder of notes | `--notes DIR [--project slug]` | every `.md` and `.txt`, recursively | content hash per file |
 | claude.ai export (web, Desktop, mobile, Cowork) | `--export FILE` | `conversations.json`, both message shapes | `updated_at` per conversation |
+| ChatGPT export | `--export FILE` | `conversations.json`, the branch of each chat that was on screen | `update_time` per conversation |
+| Gemini Apps activity (Google Takeout) | `--export FILE` | `MyActivity.json`, prompts and replies, oldest first, in ~30k windows | time of the last record read |
 | All of the above | `--all [--repos ~/GitHub] [--notes DIR] [--exports ~/memory/exports]` | transcripts, every git repo under `--repos`, notes, every `*.json` under `--exports` | as above |
 
 Cursor runs the hooks in `~/.claude/settings.json` too. Its agent transcripts mark a turn with
@@ -234,6 +236,21 @@ machine. Request a data export from claude.ai, put `conversations.json` in `~/me
 and `learn --all` reads them. A chat is filed under `claude-ai` unless the Reflector recognises
 it as being about one of your projects; its title goes along as context, not as a project name.
 
+ChatGPT and Gemini have no API for your own chats either, and are read from their exports the
+same way. `--export` tells the three apart by their shape, and `learn --all` reads every `*.json`
+in `~/memory/exports/`, whatever wrote it.
+
+- ChatGPT: Settings → Data controls → Export data. The emailed link lasts 24 hours. Put the
+  zip's `conversations.json` in `~/memory/exports/` under a name of its own, such as
+  `chatgpt-conversations.json`. Chats are filed under `chatgpt`. Only the branch of each chat
+  that was on screen is read, not the answers it replaced; custom instructions, which ride
+  hidden in every chat, are left out.
+- Gemini: at takeout.google.com, deselect all, select My Activity, and under its options keep
+  only Gemini Apps, in JSON. Put `My Activity/Gemini Apps/MyActivity.json` in
+  `~/memory/exports/`, for example as `gemini-activity.json`. Takeout keeps no conversations,
+  only prompts and replies, so they are read in time order under `gemini`, and a later Takeout
+  adds only what is newer. It holds what Gemini Apps Activity kept, 18 months by default.
+
 ## Commands
 
 Prefix with `python3 ~/GitHub/memory-optimized-context/bin/memory` (native; `.venv/bin/python3`
@@ -243,7 +260,7 @@ if you made the venv) or `docker exec memory python3 /app/memory` (Docker).
 memory search "query" [--project slug] [-k 8] [--all]
 memory remember "fact" --project slug        # refuses a slug that is not a slug, and keeps every line
 memory vote <id> --helpful | --harmful       # exits non-zero if no lesson has that id
-memory ingest [--transcript PATH --project slug] [--export conversations.json] [--wait SECONDS]
+memory ingest [--transcript PATH --project slug] [--export FILE] [--wait SECONDS]
 memory learn --all | --repo PATH | --notes DIR | --transcripts | --export FILE
 memory compile
 ```
@@ -279,7 +296,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       111 tests, six-process concurrency test included
+tests/test_memory.py       118 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it

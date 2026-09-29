@@ -21,7 +21,7 @@ way.
 ## Data flow
 
 0. **Learn.** `memory learn --all` walks Claude Code transcripts, git repositories (commit
-   messages and docs), note folders and claude.ai exports. Each source has a cursor in the
+   messages and docs), note folders and claude.ai, ChatGPT and Gemini exports. Each source has a cursor in the
    `sources` table, so the walk is incremental: a commit hash, a content hash, a byte offset,
    an `updated_at`. `[project] fact` lines anywhere are ingested without an LLM call; prose and
    whole transcripts are windowed into ~30k-character batches for the Reflector, headers
@@ -33,8 +33,9 @@ way.
    windows, oldest first, so a session that outran its stops is caught up, not skipped.
 2. **Reflect.** Claude Haiku reads the transcript since the last byte offset and returns a JSON
    array of `{project, text}` lessons. The offset is stored so the next stop reflects only what
-   is new. The same Reflector runs over claude.ai `conversations.json` exports, keyed by
-   conversation `updated_at`. When no answer comes (an API or CLI error, a usage limit), no
+   is new. The same Reflector runs over claude.ai and ChatGPT `conversations.json` exports, keyed
+   by each conversation's update time, and over Gemini's Takeout activity, keyed by the time of
+   the last record read. When no answer comes (an API or CLI error, a usage limit), no
    cursor moves past the text that went unanswered: `learn` stops, keeps and compiles what it
    did, and the next run resumes there.
 3. **Ingest.** Each lesson is upserted by `sha1(project | normalised text)[:10]`. An exact

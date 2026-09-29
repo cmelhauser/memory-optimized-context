@@ -12,7 +12,7 @@ Layout ($MEMORY_ROOT, default ~/memory):
 
 Subcommands:
   hook      called by Claude Code hooks (stdin/--input JSON): journal LESSONS, reflect transcript tail, ingest, compile
-  ingest    journal files, --transcript PATH, --export conversations.json; --wait S caps the wait for the lock
+  ingest    journal files, --transcript PATH, --export FILE (claude.ai, ChatGPT or Gemini); --wait S caps the wait
   learn     everything else, incrementally: --repo (commit messages + docs), --notes, --transcripts
             (backfill ~/.claude/projects), --export; --all does all of them
   compile   write compiled/*.md from active lessons (also prunes)
@@ -22,7 +22,7 @@ Subcommands:
   mcp       MCP server exposing recall / remember / feedback. --transport stdio (Claude Desktop, docker exec -i)
             or --transport http (Claude Code: claude mcp add --transport http memory http://127.0.0.1:8765/mcp)
 """
-import argparse, hashlib, json, math, os, re, shutil, sqlite3, subprocess, sys, tempfile, threading, time, urllib.request
+import argparse, hashlib, html, json, math, os, re, shutil, sqlite3, subprocess, sys, tempfile, threading, time, urllib.request
 from array import array
 from contextlib import contextmanager, suppress
 from datetime import datetime, timezone
@@ -535,25 +535,114 @@ def export_msg_text(m):
     return "\n".join(b["text"] for b in blocks if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)).strip()
 
 def ingest_export(c, path):
+    """An assistant's data export, told apart by its shape: claude.ai's or ChatGPT's `conversations.json`, or the
+    Gemini Apps activity from Google Takeout. None of the three has an API for a person's own chats."""
+    data = json.loads(Path(path).read_text())
+    return {"chatgpt": ingest_chatgpt, "gemini": ingest_gemini}.get(export_kind(data), ingest_claude_ai)(c, data)
+
+def export_kind(data):
+    """A ChatGPT conversation carries a `mapping` of its messages; a Takeout activity record, a `header` and a `time`.
+    Anything else is read as claude.ai's, the shape this reader began with."""
+    first = data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else {}
+    if "mapping" in first: return "chatgpt"
+    if "header" in first and "time" in first: return "gemini"
+    return "claude-ai"
+
+def reflect_chat(c, title, text, project):
+    """Every piece of one chat, each sent with its title, so a long chat is read whole and not only its tail."""
+    return [upsert(c, p, t)
+            for part in pieces_of(text, CFG["transcript_chars"] - len(title))
+            for p, t in reflect(title + part, project, known_projects(c))]
+
+def ingest_claude_ai(c, convs):
     """claude.ai data export (conversations.json). Covers web, Desktop, mobile, Cowork chats.
 
     A chat belongs to no repository, so its default project is `claude-ai`, the tool that held it, as a Codex
     session run outside a repository belongs to `codex`. Its title used to be the default instead, which made each
     of several hundred chats a project of its own. The title still travels with the text, and the Reflector is
     given every known project, so a chat about one of them is filed under it."""
-    convs = json.loads(Path(path).read_text())
     new = []
     with carrying(new):
         for cv in convs:
             key = f"export:{cv.get('uuid')}"; upd = cv.get("updated_at", "")
-            row = c.execute("SELECT cursor FROM sources WHERE key=?", (key,)).fetchone()
-            if row and row["cursor"] == upd: continue
+            if cursor(c, key) == upd: continue
             text = "\n\n".join(f"{m.get('sender','').upper()}: {t}" for m in cv.get("chat_messages", []) if (t := export_msg_text(m)))
             title = f"[a claude.ai conversation: {cv['name']}]\n" if cv.get("name") else ""
-            got = [upsert(c, p, t)                       # a long conversation is several windows, not just its tail
-                   for part in pieces_of(text, CFG["transcript_chars"] - len(title))
-                   for p, t in reflect(title + part, "claude-ai", known_projects(c))]
-            c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, upd, NOW()))
+            got = reflect_chat(c, title, text, "claude-ai")
+            set_cursor(c, key, upd)
+            new += checkpoint(c, got)
+    return new
+
+def chatgpt_turns(cv):
+    """A ChatGPT conversation's visible turns, oldest first. Its messages are a tree with a branch for every edit and
+    every regenerated answer; the one on screen ends at `current_node`, so the walk goes from there to the root. The
+    system prompt, tool calls, hidden context such as custom instructions, and non-text parts are left out."""
+    mapping = cv.get("mapping") or {}
+    node, seen, out = cv.get("current_node") or next(reversed(mapping), None), set(), []
+    while node in mapping and node not in seen:
+        seen.add(node); n = mapping[node] or {}
+        m = n.get("message") or {}
+        role = (m.get("author") or {}).get("role")
+        body = m.get("content") or {}
+        parts = body["parts"] if isinstance(body.get("parts"), list) else [body.get("text")]
+        text = "\n".join(x for x in parts if isinstance(x, str)).strip()
+        if role in ("user", "assistant") and text and not (m.get("metadata") or {}).get("is_visually_hidden_from_conversation"):
+            out.append(f"{role.upper()}: {text}")
+        node = n.get("parent")
+    return out[::-1]
+
+def ingest_chatgpt(c, convs):
+    """ChatGPT data export (Settings → Data controls → Export data). A chat's default project is `chatgpt`, as a
+    claude.ai chat's is `claude-ai`, and it is read again only when its `update_time` changes."""
+    new = []
+    with carrying(new):
+        for cv in convs:
+            key = f"chatgpt:{cv.get('conversation_id') or cv.get('id')}"; upd = str(cv.get("update_time") or "")
+            if cursor(c, key) == upd: continue
+            title = f"[a ChatGPT conversation: {cv['title']}]\n" if cv.get("title") else ""
+            got = reflect_chat(c, title, "\n\n".join(chatgpt_turns(cv)), "chatgpt")
+            set_cursor(c, key, upd)
+            new += checkpoint(c, got)
+    return new
+
+GEMINI = {"Gemini Apps", "Bard"}   # Takeout's name for Gemini's activity, and the name it had before
+
+def html_text(s):
+    """The text of an HTML fragment: a block's end kept as a line break, tags dropped, entities decoded."""
+    return html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"(?i)<br\s*/?>|</(?:p|div|li|h\d|pre|tr)>", "\n", s))).strip()
+
+def instant(stamp):
+    """A Takeout timestamp as an aware datetime, or None for one that is not a timestamp."""
+    try: t = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError: return None
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+def gemini_turns(records, since=None):
+    """Takeout's Gemini Apps activity after `since`, as (text, ISO time) oldest first. A record is one prompt, as
+    `title` "Prompted …", and its reply, as HTML in `safeHtmlItem`. Records made at the same instant are one turn,
+    so a window never ends between them, and a cursor at that instant can skip neither. A record of another product,
+    or without a time, is not read."""
+    at = {}
+    for r in records:
+        if not isinstance(r, dict) or not ({r.get("header")} | set(r.get("products") or [])) & GEMINI: continue
+        t = instant(r.get("time"))
+        if t is None or (since and t <= since): continue
+        prompt = re.sub(r"^Prompted ", "", r.get("title") or "").strip()
+        reply = "\n".join(html_text(i.get("html") or "") for i in r.get("safeHtmlItem") or [] if isinstance(i, dict)).strip()
+        text = "\n\n".join(x for x in (prompt and f"USER: {prompt}", reply and f"ASSISTANT: {reply}") if x)
+        if text: at.setdefault(t, []).append(text)
+    return [("\n\n".join(texts), t.isoformat()) for t, texts in sorted(at.items())]
+
+def ingest_gemini(c, records):
+    """Gemini Apps activity from Google Takeout (My Activity → Gemini Apps, as JSON). It holds no conversations, only
+    a stream of prompts, so it has one cursor, the time of the last one read, and a later Takeout, which repeats
+    everything before it, adds only what is newer. It is read in windows, the cursor moved after each."""
+    key, new = "gemini:activity", []
+    start = cursor(c, key) or ""
+    with carrying(new):
+        for text, done in turn_windows(gemini_turns(records, instant(start)), start, CFG["transcript_chars"]):
+            got = [upsert(c, p, t) for p, t in reflect(text, "gemini", known_projects(c))]
+            set_cursor(c, key, done)
             new += checkpoint(c, got)
     return new
 
@@ -1004,7 +1093,7 @@ def main():
     s.add_argument("--transcripts", action="store_true",
                    help="backfill every transcript this machine holds: Claude Code, Cursor, Claude Desktop's agent mode, Codex")
     s.add_argument("--transcripts-from", action="append", help="a folder of transcripts to read as well")
-    s.add_argument("--export", action="append", help="claude.ai conversations.json")
+    s.add_argument("--export", action="append", help="an export: claude.ai or ChatGPT conversations.json, or Takeout's Gemini Apps MyActivity.json")
     s.add_argument("--exports", help="folder of exports for --all (default $MEMORY_ROOT/exports)")
     s.add_argument("--max-calls", type=int, help="stop after about N Reflector calls, contradiction checks included; the next run carries on")
     s.set_defaults(f=cmd_learn)

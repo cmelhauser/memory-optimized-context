@@ -20,7 +20,7 @@ proves each closure is named.
 | Same transcript reflected twice | byte-offset cursor in `sources`, moved window by window | `test_ingest_transcript_stores_cursor`, `test_backfill_stops_at_a_failed_window_and_the_next_run_resumes_there` |
 | A session outruns its stops while the lock is busy | the next stop reads from the cursor, oldest first, at most two windows, and moves the cursor only past them | `test_backfill_reads_every_window_and_a_hook_two_oldest_first` |
 | A Reflector call fails part-way through a source | no cursor moves past unanswered text; the run stops, keeps and compiles what it did | `test_learn_stops_on_a_failed_reflector_keeps_its_progress_and_resumes`, `test_commit_cursor_after_a_failure_is_the_last_reflected_commit` |
-| Same export ingested twice | `updated_at` cursor per conversation | `test_export_ingest_is_idempotent_per_updated_at` |
+| Same export ingested twice | update-time cursor per conversation; for Gemini's activity, the time of the last record read | `test_export_ingest_is_idempotent_per_updated_at`, `test_a_chatgpt_export_is_read_along_the_branch_on_screen`, `test_gemini_takeout_activity_is_read_in_time_order_and_only_once` |
 | Drive conflict copies | `compiled/` written only locally; `journal/claude-ai/` written only by claude.ai | by construction; no file has two writers |
 | Host and container both compile | the lock directory is on the bind mount both see | by construction |
 | SQLite corruption on macOS bind mount | database on a named volume | Compose file |
