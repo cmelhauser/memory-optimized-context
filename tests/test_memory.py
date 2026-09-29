@@ -1886,10 +1886,22 @@ def test_a_gemini_window_left_unanswered_is_offered_again(m, tmp_path, monkeypat
     assert ("twin" in answered) == ("question 03" in answered) != ("twin" in said)
 
 
-def test_an_export_of_an_unknown_shape_is_read_as_claude_ai(m):
-    assert m.export_kind([]) == "claude-ai" and m.export_kind({}) == "claude-ai" and m.export_kind(["x"]) == "claude-ai"
+def test_a_json_file_that_is_no_export_is_skipped_not_misread(m, tmp_path, monkeypatch, capsys):
+    """`learn --all` reads every `*.json` in `exports/`. The manifest of a claude.ai export stopped every run with an
+    AttributeError, and a claude.ai project was read as a conversation and left a cursor behind."""
+    monkeypatch.setattr(m, "llm", tracing_llm([]))
+    files = {"manifest.json": '{"export_id": "e", "files": []}', "project.json": '[{"uuid": "p", "docs": []}]',
+             "truncated.json": '[{"uuid": "u", "chat_mess', "empty.json": "[]"}
+    for name, body in files.items():
+        (tmp_path / name).write_text(body)
+    with m.db() as c:
+        assert all(m.ingest_export(c, tmp_path / name) == [] for name in files)
+        assert c.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 0
+    err = capsys.readouterr().err
+    assert all(f"skipping {tmp_path / n}" in err for n in ("manifest.json", "project.json", "truncated.json"))
+    assert "empty.json" not in err                                        # an empty export is not a wrong one
     assert m.export_kind([{"uuid": "u", "chat_messages": []}]) == "claude-ai"
-    assert m.export_kind([{"mapping": {}}]) == "chatgpt"
+    assert m.export_kind([{"mapping": {}}]) == "chatgpt" and m.export_kind(["x"]) is None
 
 
 def test_takeout_times_and_html_are_read_plainly(m):
@@ -1898,6 +1910,7 @@ def test_takeout_times_and_html_are_read_plainly(m):
     assert m.instant("2026-01-01T00:00:00.5Z") == m.instant("2026-01-01T00:00:00.500Z")    # any number of digits
     assert m.instant("2026-01-01T00:00:00.1234567Z") == m.instant("2026-01-01T00:00:00.123456+00:00")
     assert m.html_text("<ul><li>one</li><li>two &lt;3</li></ul>") == "one\ntwo <3"
+    assert m.html_text("<table><tr><th>a</th><th>b</th></tr><tr><td>1</td><td>2</td></tr></table>") == "a b \n1 2"
 
 
 # ------------------------------------------------------------------ the scripts themselves

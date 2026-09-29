@@ -249,7 +249,10 @@ in `~/memory/exports/`, whatever wrote it.
   only Gemini Apps, in JSON. Put `My Activity/Gemini Apps/MyActivity.json` in
   `~/memory/exports/`, for example as `gemini-activity.json`. Takeout keeps no conversations,
   only prompts and replies, so they are read in time order under `gemini`, and a later Takeout
-  adds only what is newer. It holds what Gemini Apps Activity kept, 18 months by default.
+  adds only what is newer. It holds what Gemini Apps Activity kept, 18 months by default. The
+  cursor is one for all Gemini activity, so read one Google account's Takeout: a second
+  account's activity from before the first's last record would be skipped.
+- Anything else in `exports/`, such as the manifest of a claude.ai export, is logged and skipped.
 
 ## Commands
 

@@ -536,17 +536,24 @@ def export_msg_text(m):
 
 def ingest_export(c, path):
     """An assistant's data export, told apart by its shape: claude.ai's or ChatGPT's `conversations.json`, or the
-    Gemini Apps activity from Google Takeout. None of the three has an API for a person's own chats."""
-    data = json.loads(Path(path).read_text())
-    return {"chatgpt": ingest_chatgpt, "gemini": ingest_gemini}.get(export_kind(data), ingest_claude_ai)(c, data)
+    Gemini Apps activity from Google Takeout. None of the three has an API for a person's own chats. `learn --all`
+    reads every `*.json` in `exports/`, so any other file there, a truncated download included, is logged and skipped:
+    the manifest that comes with a claude.ai export used to stop every run with an AttributeError."""
+    try: data = json.loads(Path(path).read_text())
+    except ValueError: data = None
+    read = {"claude-ai": ingest_claude_ai, "chatgpt": ingest_chatgpt, "gemini": ingest_gemini}.get(export_kind(data))
+    if read: return read(c, data)
+    if data != []: log(f"skipping {path}: not a claude.ai, ChatGPT or Gemini export")
+    return []
 
 def export_kind(data):
-    """A ChatGPT conversation carries a `mapping` of its messages; a Takeout activity record, a `header` and a `time`.
-    Anything else is read as claude.ai's, the shape this reader began with."""
+    """A claude.ai conversation carries `chat_messages`; a ChatGPT one, a `mapping` of its messages; a Takeout activity
+    record, a `header` and a `time`. Anything else, such as a claude.ai project or the manifest of an export, is None."""
     first = data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else {}
+    if "chat_messages" in first: return "claude-ai"
     if "mapping" in first: return "chatgpt"
     if "header" in first and "time" in first: return "gemini"
-    return "claude-ai"
+    return None
 
 def reflect_chat(c, title, text, project):
     """Every piece of one chat, each sent with its title, so a long chat is read whole and not only its tail."""
@@ -608,8 +615,10 @@ def ingest_chatgpt(c, convs):
 GEMINI = {"Gemini Apps", "Bard"}   # Takeout's name for Gemini's activity, and the name it had before
 
 def html_text(s):
-    """The text of an HTML fragment: a block's end kept as a line break, tags dropped, entities decoded."""
-    return html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"(?i)<br\s*/?>|</(?:p|div|li|h\d|pre|tr)>", "\n", s))).strip()
+    """The text of an HTML fragment: a block's end kept as a line break, a table cell's as a space, tags dropped,
+    entities decoded."""
+    s = re.sub(r"(?i)</t[dh]>", " ", re.sub(r"(?i)<br\s*/?>|</(?:p|div|li|h\d|pre|tr)>", "\n", s))
+    return html.unescape(re.sub(r"<[^>]+>", "", s)).strip()
 
 def instant(stamp):
     """A Takeout timestamp as an aware datetime, or None for one that is not a timestamp. Its fraction of a second is

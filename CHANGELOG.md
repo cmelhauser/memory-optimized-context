@@ -102,6 +102,10 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A JSON file in `exports/` that is no conversation export stopped `learn --all` on every run:
+  the manifest that comes with a claude.ai export raised `AttributeError`, and a claude.ai
+  project was read as a conversation and left a cursor behind. Such a file, or a truncated one,
+  is now logged and skipped. `test_a_json_file_that_is_no_export_is_skipped_not_misread`.
 - An exported claude.ai chat was filed under a project named after its title, so an export of
   several hundred chats would have made several hundred projects, each with a compiled file of its
   own. A chat now defaults to `claude-ai`, the tool that held it, as a Codex session outside a
