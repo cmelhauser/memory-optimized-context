@@ -15,7 +15,7 @@ reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.1.0`. 119 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.1.0`. 124 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. It has run natively against a real store
@@ -173,7 +173,7 @@ database, so it is safe to run daily; a second run over an unchanged source make
 
 | Source | Flag | What is read | Cursor |
 |---|---|---|---|
-| Transcripts: Claude Code, Cursor, Claude Desktop's agent mode, Codex | `--transcripts [--transcripts-from DIR]` | every transcript in the folders under [What `--transcripts` reads](#what---transcripts-reads), whole, in ~30k windows; for Claude Code, the session files in `~/.claude/projects/*/`, not its subagents' | byte offset per file, moved window by window |
+| Transcripts: Claude Code, Cursor, Claude Desktop's agent mode, Codex | `--transcripts [--transcripts-from DIR]` | every transcript in the folders under [What `--transcripts` reads](#what---transcripts-reads), whole, in ~30k windows; for Claude Code, each session and, beneath it, its subagents and workflow agents | byte offset per file, moved window by window |
 | A git repository | `--repo PATH` | commit messages (`--no-merges`, oldest first), `README*`, `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `HANDOFF.md`, `docs/**/*.md`, `*.md` | last commit reflected; content hash per doc |
 | A folder of notes | `--notes DIR [--project slug]` | every `.md` and `.txt`, recursively | content hash per file |
 | claude.ai export (web, Desktop, mobile, Cowork) | `--export FILE` | `conversations.json`, both message shapes | `updated_at` per conversation |
@@ -211,6 +211,9 @@ reads as 2.
 reflection, and a contradiction check when a new lesson has neighbours worth comparing it against. The run stops the same way, so a
 first backfill can be spread out, for example `learn --transcripts --max-calls 60` every few hours.
 
+A contradiction check the budget leaves for later, or one that gets no answer, is owed rather than
+skipped: the lesson stays active, and the next `learn` asks it first, before reading anything new.
+
 ```bash
 python3 bin/memory learn --all                           # native
 docker exec memory python3 /app/memory learn --all       # Docker
@@ -220,7 +223,7 @@ docker exec memory python3 /app/memory learn --all       # Docker
 
 | Where | Written by |
 | --- | --- |
-| `~/.claude/projects` | Claude Code: the CLI, the editor extensions, and the desktop app's Code tab |
+| `~/.claude/projects` | Claude Code: the CLI, the editor extensions, and the desktop app's Code tab, with each session's subagents and workflow agents |
 | `~/.cursor/projects` | Cursor, including each session's subagents |
 | `~/Library/Application Support/Claude/local-agent-mode-sessions` | Claude Desktop's agent mode |
 | `~/.codex/sessions` | Codex rollouts, whose conversation is read out of the surrounding tool calls |
@@ -269,7 +272,7 @@ memory ingest [--transcript PATH --project slug] [--export FILE] [--wait SECONDS
 memory learn [--all [--repos DIR] [--exports DIR]] [--repo PATH [--since DATE]] [--notes DIR [--project slug]]
              [--transcripts] [--transcripts-from DIR] [--export FILE] [--max-calls N]
 memory compile
-memory mcp [--transport stdio | http] [--port 8765]
+memory mcp [--transport stdio | http] [--port 8765] [--host 127.0.0.1]   # HTTP: this machine only unless --host says otherwise
 memory hook [--role main | sub]              # run by the hooks, not by hand
 ```
 
@@ -307,7 +310,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       119 tests, six-process concurrency test included
+tests/test_memory.py       124 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it

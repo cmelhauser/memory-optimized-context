@@ -25,7 +25,8 @@ Subcommands (`memory COMMAND --help` for every flag):
   remember  add one lesson by hand
   vote      --helpful/--harmful ID
   mcp       MCP server exposing recall / remember / feedback. --transport stdio (Claude Desktop, docker exec -i)
-            or --transport http (Claude Code: claude mcp add --transport http memory http://127.0.0.1:8765/mcp)
+            or --transport http, on 127.0.0.1 unless --host (Claude Code: claude mcp add --transport http memory
+            http://127.0.0.1:8765/mcp)
 """
 import argparse, hashlib, html, json, math, os, re, shutil, sqlite3, subprocess, sys, tempfile, threading, time, urllib.request
 from array import array
@@ -391,24 +392,53 @@ CONTRA_SYS = ('Given a NEW lesson and CANDIDATE lessons from the same project, d
               '"contradicts" (cannot both be true; the new one is more recent), or "unrelated". '
               'Output ONLY JSON: {"same": ["id",...], "contradicts": ["id",...]}.')
 
+RECHECK = "recheck:"   # a `sources` key: a contradiction check owed to this lesson id
+
 def reconcile(c, new_id):
+    """Compare a new lesson with its nearest neighbours in the same project: `same` folds its votes into the older and
+    retires it as merged; `contradicts` marks the older superseded. Returns False when the check is owed instead:
+    no answer came, or a `--max-calls` budget is spent. The lesson stays active meanwhile, and a `recheck:<id>` row in
+    `sources` holds the debt until `recheck_owed` pays it. Such a check used to be skipped for good: a usage limit
+    that hit mid-run left hundreds of lessons active and never compared with anything."""
     r = c.execute("SELECT * FROM lessons WHERE id=?", (new_id,)).fetchone()
     cands = [x for x in search(c, r["text"], r["project"], k=6) if x["id"] != new_id]
-    if not cands: return
-    if BUDGET["max"] is not None and BUDGET["used"] >= BUDGET["max"]: return   # left unchecked, and nothing rechecks it yet
-    spend()
-    raw = llm(f"NEW: {r['text']}\nCANDIDATES:\n" + "\n".join(f"{x['id']}: {x['text']}" for x in cands), CONTRA_SYS, 300)
-    if raw is not None: BUDGET["answered"] += 1
-    out = parse_json(raw)
+    if cands:
+        if BUDGET["max"] is not None and BUDGET["used"] >= BUDGET["max"]: return owe_check(c, new_id)
+        spend()
+        raw = llm(f"NEW: {r['text']}\nCANDIDATES:\n" + "\n".join(f"{x['id']}: {x['text']}" for x in cands), CONTRA_SYS, 300)
+        if raw is None and CFG["llm"] != "none": return owe_check(c, new_id)   # none: keyword-only by choice, owed nothing
+        if raw is not None: BUDGET["answered"] += 1
+        apply_verdict(c, r, cands, parse_json(raw))
+    c.execute("DELETE FROM sources WHERE key=?", (RECHECK + new_id,))
+    return True
+
+def apply_verdict(c, r, cands, out):
     if not isinstance(out, dict): out = {}   # an answer shaped as an array is no verdict, not a crash mid-run
     for sid in out.get("same", []):
         if any(x["id"] == sid for x in cands):  # merge: fold votes into the older, retire the new
             c.execute("UPDATE lessons SET votes=votes+?, last_seen=? WHERE id=?", (r["votes"], NOW(), sid))
-            c.execute("UPDATE lessons SET state='merged', superseded_by=? WHERE id=?", (sid, new_id))
+            c.execute("UPDATE lessons SET state='merged', superseded_by=? WHERE id=?", (sid, r["id"]))
             return
     for cid in out.get("contradicts", []):
         if any(x["id"] == cid for x in cands):
-            c.execute("UPDATE lessons SET state='superseded', superseded_by=? WHERE id=?", (new_id, cid))
+            c.execute("UPDATE lessons SET state='superseded', superseded_by=? WHERE id=?", (r["id"], cid))
+
+def owe_check(c, lesson_id):
+    set_cursor(c, RECHECK + lesson_id, "owed")
+    return False
+
+def recheck_owed(c):
+    """Pay the contradiction checks earlier runs owe, oldest first, before `learn` reads anything new. A lesson merged,
+    superseded or archived since is owed nothing. It stops at the first check still unanswered, so a Reflector that
+    is down costs one call here, not one per debt. Returns the lessons it settled."""
+    c.execute("DELETE FROM sources WHERE key LIKE ? AND substr(key, ?) NOT IN (SELECT id FROM lessons WHERE state='active')",
+              (RECHECK + "%", len(RECHECK) + 1))
+    settled = []
+    for (key,) in c.execute("SELECT key FROM sources WHERE key LIKE ? ORDER BY seen, key", (RECHECK + "%",)).fetchall():
+        if not reconcile(c, key[len(RECHECK):]): break
+        settled.append(key[len(RECHECK):])
+    c.commit()
+    return settled
 
 
 # ---------------------------------------------------------------- adapters
@@ -844,10 +874,12 @@ def decode_cwd(name, base="/"):
 def claude_code_project_dirs(root=None):
     """~/.claude/projects/<encoded-cwd>/ → (project slug, [transcript paths]). The encoding turns '/' and '.' into '-',
     which cannot be undone for a hyphenated repo name, so the slug comes from the cwd recorded inside the transcripts.
-    A folder without one has no turns to reflect; its last '-' segment stands in."""
+    A folder without one has no turns to reflect; its last '-' segment stands in. The sessions come first, then what
+    they ran beneath them (`<session>/subagents/`, a workflow's agents), which were once not read at all."""
     root = Path(root or Path.home() / ".claude" / "projects")
     for d in sorted(root.glob("*/")):
-        found = sorted(d.glob("*.jsonl")); files = [f for f in found if not reflector_transcript(f)]
+        found = sorted(d.glob("*.jsonl")) + sorted(f for f in d.glob("*/**/*.jsonl") if f.is_file())
+        files = [f for f in found if not reflector_transcript(f)]
         if found and not files: continue   # a folder holding only the Reflector's own sessions
         cwd = transcript_cwd(files)
         yield (project_of(cwd) if cwd else d.name.rstrip("-").rsplit("-", 1)[-1].lower() or "all"), files
@@ -1014,6 +1046,7 @@ def cmd_learn(a):
     BUDGET.update(max=a.max_calls, used=0, answered=0)
     with Lock(), db() as c:
         new = ingest_journal(c)
+        recheck_owed(c)                          # checks earlier runs could not make come first; the hooks never pay them
         with stopping(new) as failed:
             if a.all: new += learn_all(c, a.repos or (Path.home() / "GitHub"), a.notes, a.exports or (ROOT / "exports"))
             for r in a.repo or []: new += learn_repo(c, r, a.since)
@@ -1051,14 +1084,16 @@ def cmd_vote(a):
     if not voted: sys.exit(f"memory: no lesson has id {a.id}; `memory search` prints the id beside each one")
 
 def cmd_mcp(a):
-    """MCP server. Works with mcp 1.x (FastMCP) and 2.x (MCPServer)."""
+    """MCP server. Works with mcp 1.x (FastMCP) and 2.x (MCPServer). Over HTTP it listens on loopback unless told
+    otherwise: it has no authentication, and every interface put anyone on the network one request from the store.
+    The image passes `--host 0.0.0.0`, which Compose publishes on the host's loopback only."""
     try:
         from mcp.server.mcpserver import MCPServer as Server; v2 = True
     except ImportError:
         try:
             from mcp.server.fastmcp import FastMCP as Server; v2 = False
         except ImportError: raise SystemExit("pip install mcp") from None
-    srv = Server("memory") if v2 else Server("memory", host="0.0.0.0", port=a.port)
+    srv = Server("memory") if v2 else Server("memory", host=a.host, port=a.port)
 
     @srv.tool()
     def recall(query: str, project: str = "", k: int = 8) -> str:
@@ -1093,7 +1128,7 @@ def cmd_mcp(a):
         return "ok" if voted else f"no lesson has id {lesson_id}"
 
     if a.transport == "http":
-        srv.run(transport="streamable-http", host="0.0.0.0", port=a.port) if v2 else srv.run(transport="streamable-http")
+        srv.run(transport="streamable-http", host=a.host, port=a.port) if v2 else srv.run(transport="streamable-http")
     else:
         srv.run(transport="stdio")
 
@@ -1147,6 +1182,7 @@ def main():
     s = sp.add_parser("mcp", help="serve recall, remember and feedback over MCP")
     s.add_argument("--transport", choices=["stdio", "http"], default="stdio", help="stdio for Claude Desktop, http for the container (default stdio)")
     s.add_argument("--port", type=int, default=8765, help="port for --transport http (default 8765)")
+    s.add_argument("--host", default="127.0.0.1", help="address for --transport http to listen on (default 127.0.0.1, this machine only)")
     s.set_defaults(f=cmd_mcp)
     a = ap.parse_args(); a.f(a)
 

@@ -534,6 +534,7 @@ def test_mcp_tools_are_registered(m, monkeypatch):
     class Args:
         transport = "stdio"
         port = 0
+        host = "127.0.0.1"
 
     def fake_run(self, *a, **k):
         captured["ran"] = True
@@ -1094,17 +1095,21 @@ def fake_mcp(monkeypatch, v2):
 
 
 def test_mcp_tools_answer_on_both_mcp_versions_and_transports(m, monkeypatch):
-    """mcp 2.x takes host and port at run(), 1.x at construction; recall, remember and feedback work through either."""
+    """mcp 2.x takes host and port at run(), 1.x at construction; recall, remember and feedback work through either.
+    Over HTTP it listens where `--host` says, loopback unless told otherwise: it has no authentication."""
+    helptext = subprocess.run([sys.executable, str(BIN), "mcp", "--help"], capture_output=True, text=True, check=True).stdout
+    assert "(default 127.0.0.1, this machine only)" in " ".join(helptext.split())
     for v2, transport in ((True, "http"), (False, "http"), (True, "stdio")):
         srv_class = fake_mcp(monkeypatch, v2)
-        m.cmd_mcp(types.SimpleNamespace(transport=transport, port=9999))
+        m.cmd_mcp(types.SimpleNamespace(transport=transport, port=9999, host="127.0.0.1"))
         srv = srv_class.last
         if transport == "stdio":
             assert srv.runs == [{"transport": "stdio"}]
         elif v2:
-            assert srv.runs == [{"transport": "streamable-http", "host": "0.0.0.0", "port": 9999}] and srv.kwargs == {}
+            assert srv.runs == [{"transport": "streamable-http", "host": "127.0.0.1", "port": 9999}] and srv.kwargs == {}
         else:
-            assert srv.runs == [{"transport": "streamable-http"}] and srv.kwargs == {"host": "0.0.0.0", "port": 9999}
+            assert srv.runs == [{"transport": "streamable-http"}] and srv.kwargs == {"host": "127.0.0.1", "port": 9999}
+    assert '"--host", "0.0.0.0"' in (REPO / "Dockerfile").read_text()      # the container must listen beyond itself
     tools = srv.tools
     assert tools["recall"]("anything") == "no matches"
     assert tools["remember"]("mcp fact", "p") == "saved to p"
@@ -1120,7 +1125,7 @@ def test_mcp_tools_answer_on_both_mcp_versions_and_transports(m, monkeypatch):
 def test_mcp_tools_answer_busy_while_a_learn_holds_the_lock(m, monkeypatch):
     """A tool must not stop the server when a long `learn` holds the lock; a remembered lesson waits in the journal."""
     srv_class = fake_mcp(monkeypatch, True)
-    m.cmd_mcp(types.SimpleNamespace(transport="stdio", port=0))
+    m.cmd_mcp(types.SimpleNamespace(transport="stdio", port=0, host="127.0.0.1"))
     tools = srv_class.last.tools
     monkeypatch.setattr(m, "LOCK_WAIT", 0.1)
     m.ROOT.mkdir(parents=True, exist_ok=True)
@@ -1136,7 +1141,7 @@ def test_mcp_needs_the_mcp_package(m, monkeypatch):
     monkeypatch.setitem(sys.modules, "mcp.server.mcpserver", None)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", None)
     with pytest.raises(SystemExit, match="pip install mcp"):
-        m.cmd_mcp(types.SimpleNamespace(transport="stdio", port=0))
+        m.cmd_mcp(types.SimpleNamespace(transport="stdio", port=0, host="127.0.0.1"))
 
 
 # ------------------------------------------------------------------ Reflector, embeddings and search edges
@@ -1342,6 +1347,102 @@ def test_a_run_whose_every_call_went_unanswered_exits_2_even_after_a_contradicti
         m.main()
     assert any("CANDIDATES:" in p for p in calls)                  # the check was asked, and went unanswered
     assert e.value.code == 2 and "stopped early" in capsys.readouterr().err
+
+
+def test_a_sessions_subagents_and_workflow_agents_are_read_under_its_project(m, tmp_path, monkeypatch):
+    """Claude Code writes what a session ran one level down or more: `<session>/subagents/*.jsonl`, and a workflow's
+    agents deeper still. The backfill read only the sessions, so every subagent's conversation went unread."""
+    d = tmp_path / "projects" / "-home-me-GitHub-flood-risk-model"
+    (d / "s1" / "subagents").mkdir(parents=True)
+    (d / "s1" / "workflows" / "wf_1" / "agents").mkdir(parents=True)
+    transcript(d / "s1.jsonl", [("user", "session turn"), ("assistant", "ok")], cwd="/home/me/GitHub/flood-risk-model")
+    transcript(d / "s1" / "subagents" / "a1.jsonl", [("user", "subagent turn"), ("assistant", "ok")])
+    transcript(d / "s1" / "workflows" / "wf_1" / "agents" / "w1.jsonl", [("user", "workflow agent turn"), ("assistant", "ok")])
+    calls = []
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    [(slug, files)] = list(m.claude_code_project_dirs(tmp_path / "projects"))
+    assert slug == "flood-risk-model" and files[0].name == "s1.jsonl" and len(files) == 3   # the session first
+    with m.db() as c:
+        m.learn_transcripts(c, tmp_path / "projects")
+        c.commit()
+        assert m.learn_transcripts(c, tmp_path / "projects") == []         # each read once, by its own cursor
+    said = "".join(p for p in calls if "<conversation>" in p)
+    assert all(t in said for t in ("session turn", "subagent turn", "workflow agent turn"))
+
+
+def lesson_pair(m):
+    """A lesson, and a newer one close enough to it that a contradiction check is asked for."""
+    with m.db() as c:
+        m.upsert(c, "alpha", "deploys go out on tuesdays")
+        new, _ = m.upsert(c, "alpha", "deploys go out on tuesdays after the freeze")
+        c.commit()
+    return new
+
+
+def test_a_contradiction_check_that_got_no_answer_is_owed_and_paid_by_the_next_learn(m, monkeypatch):
+    """A usage limit that hit mid-run left hundreds of new lessons active and never compared with anything: the check
+    that went unanswered was skipped for good, and a later run had no way to know."""
+    new = lesson_pair(m)
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    monkeypatch.setattr(m, "llm", lambda *a, **k: None)
+    with m.db() as c:
+        assert m.reconcile(c, new) is False
+        c.commit()
+        assert m.cursor(c, m.RECHECK + new) == "owed"
+    calls = []
+    def same(prompt, *a, **k):
+        calls.append(prompt)
+        old = prompt.split("CANDIDATES:\n", 1)[1].split(":", 1)[0]
+        return json.dumps({"same": [old], "contradicts": []})
+    monkeypatch.setattr(m, "llm", same)
+    monkeypatch.setattr(sys, "argv", ["memory", "learn"])
+    m.main()
+    with m.db() as c:
+        assert c.execute("SELECT state FROM lessons WHERE id=?", (new,)).fetchone()[0] == "merged"
+        assert m.cursor(c, m.RECHECK + new) is None
+    assert len(calls) == 1
+    monkeypatch.setattr(sys, "argv", ["memory", "learn"])
+    m.main()
+    assert len(calls) == 1                                                # paid once, not again
+
+
+def test_a_check_the_budget_left_for_later_is_owed_too(m, monkeypatch):
+    new = lesson_pair(m)
+    m.BUDGET.update(max=0, used=0, answered=0)
+    with m.db() as c:
+        assert m.reconcile(c, new) is False and m.cursor(c, m.RECHECK + new) == "owed"
+    m.BUDGET.update(max=None)
+
+
+def test_paying_owed_checks_stops_at_the_first_unanswered_and_forgets_retired_lessons(m, monkeypatch):
+    """A Reflector that is down should cost one call here, not one per debt; a lesson merged or archived since it was
+    owed a check is owed nothing."""
+    first = lesson_pair(m)
+    with m.db() as c:
+        m.upsert(c, "beta", "the build runs on the spare host")
+        second, _ = m.upsert(c, "beta", "the build runs on the spare host at night")
+        gone, _ = m.upsert(c, "gamma", "a lesson retired since")
+        c.execute("UPDATE lessons SET state='archived' WHERE id=?", (gone,))
+        for i in (gone, first, second):
+            m.owe_check(c, i)
+        c.commit()
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    calls = []
+    monkeypatch.setattr(m, "llm", lambda p, *a, **k: calls.append(p) and None)
+    with m.db() as c:
+        assert m.recheck_owed(c) == []
+        owed = {k for (k,) in c.execute("SELECT key FROM sources WHERE key LIKE 'recheck:%'")}
+    assert len(calls) == 1 and owed == {m.RECHECK + first, m.RECHECK + second}
+    monkeypatch.setattr(m, "llm", lambda *a, **k: '{"same": [], "contradicts": []}')
+    with m.db() as c:
+        assert sorted(m.recheck_owed(c)) == sorted([first, second])
+        assert c.execute("SELECT COUNT(*) FROM sources WHERE key LIKE 'recheck:%'").fetchone()[0] == 0
+
+
+def test_no_llm_by_choice_owes_no_checks(m):
+    new = lesson_pair(m)
+    with m.db() as c:                                                     # MEMORY_LLM=none, the tests' default
+        assert m.reconcile(c, new) is True and m.cursor(c, m.RECHECK + new) is None
 
 
 def test_remember_saves_the_whole_lesson_or_says_why_it_cannot(m, tmp_path, monkeypatch, capsys):

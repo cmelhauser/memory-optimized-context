@@ -103,6 +103,20 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A contradiction check that got no answer, or that `--max-calls` left for later, was skipped for
+  good: the new lesson stayed active and was never compared with anything. A usage limit that
+  hit mid-run left several hundred such lessons. The check is now owed, as a `recheck:<id>` row
+  in `sources`, and the next `learn` pays it before reading anything new, stopping at the first
+  one still unanswered; a lesson retired meanwhile is owed nothing. No schema change.
+  `test_a_contradiction_check_that_got_no_answer_is_owed_and_paid_by_the_next_learn`,
+  `test_a_check_the_budget_left_for_later_is_owed_too`,
+  `test_paying_owed_checks_stops_at_the_first_unanswered_and_forgets_retired_lessons`.
+- `memory mcp --transport http` listened on every interface, with no authentication, when run
+  outside the container. It now listens on `127.0.0.1` unless `--host` says otherwise; the image
+  passes `--host 0.0.0.0`, which Compose publishes on the host's loopback only.
+- The transcript backfill read each Claude Code session but not what it ran: `<session>/subagents/`
+  and a workflow's agents beneath it were never read. They are now, under the session's project.
+  `test_a_sessions_subagents_and_workflow_agents_are_read_under_its_project`.
 - A run whose every Reflector call went unanswered could exit 1, "part-way, run me again",
   instead of 2, so an expired login went unreported. Lessons the hooks journaled during the
   outage are ingested at the start of the next run, and each one with a neighbour costs a

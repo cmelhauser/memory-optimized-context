@@ -45,7 +45,9 @@ way.
 3. **Ingest.** Each lesson is upserted by `sha1(project | normalised text)[:10]`. An exact
    duplicate is a vote. Nothing is ever overwritten.
 4. **Reconcile.** A new lesson is compared with its nearest neighbours in the same project, up
-   to six; one with none costs no call.
+   to six; one with none costs no call. A check that gets no answer, or that a `--max-calls`
+   budget leaves for later, is owed: a `recheck:<id>` row in `sources`, paid first by the next
+   `learn`.
    `same` folds the new lesson's votes into the older one and retires the new one as `merged`.
    `contradicts` marks the older lesson `superseded` by the new one. Both stay in the database.
 5. **Prune.** `score = (votes + helpful - 2*harmful) * 0.5^(age_days/90)`. Below 0.15, or

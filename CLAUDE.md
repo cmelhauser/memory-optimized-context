@@ -65,6 +65,9 @@ before editing either.
   project named after its title, unless the Reflector recognises one of the known projects in it.
 - A JSON file in `exports/` that is none of the three exports, such as the manifest that comes
   with a claude.ai export, is logged and skipped by `learn --all`.
+- A `recheck:<id>` row in `sources` is a contradiction check owed to an active lesson: it got no
+  answer, or the budget ran out. The next `learn` pays it first; the hooks and `ingest` never do,
+  because the SessionStart hook runs in the foreground.
 - A Stop hook reads at most two windows of new transcript. A session that outran its stops while
   the lock was busy is caught up by its next stops or by `learn --transcripts`; its cursor never
   moves past what was read.

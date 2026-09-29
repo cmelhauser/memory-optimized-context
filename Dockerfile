@@ -12,4 +12,4 @@ ENV MEMORY_DB=/data/memory.db PYTHONUNBUFFERED=1
 VOLUME /data
 EXPOSE 8765
 ENTRYPOINT ["python3", "/app/memory"]
-CMD ["mcp", "--transport", "http", "--port", "8765"]
+CMD ["mcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8765"]   # Compose publishes it on loopback only
