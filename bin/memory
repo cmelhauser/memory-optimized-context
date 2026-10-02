@@ -388,33 +388,63 @@ def known_projects(c):
 
 
 # ---------------------------------------------------------------- contradiction check (ADD-only supersession)
-CONTRA_SYS = ('Given a NEW lesson and CANDIDATE lessons from the same project, decide for each candidate: "same" (restates the new lesson), '
-              '"contradicts" (cannot both be true; the new one is more recent), or "unrelated". '
-              'Output ONLY JSON: {"same": ["id",...], "contradicts": ["id",...]}.')
+CONTRA_SYS = ('For each NEW lesson below, compare it with the CANDIDATE lessons listed under it, which come from the same project. '
+              'Decide for each candidate: "same" (restates the new lesson), "contradicts" (cannot both be true; the new one is '
+              'more recent), or "unrelated". Output ONLY JSON with one entry per NEW lesson id: '
+              '{"<new id>": {"same": ["id",...], "contradicts": ["id",...]}, ...}. Omit a NEW lesson whose candidates are all unrelated.')
+CONTRA_SYS_BEFORE = "Given a NEW lesson and CANDIDATE lessons "   # how the check began before it took a group, for old transcripts
+CHECK_GROUP = 8   # new lessons asked about in one contradiction call
 
 RECHECK = "recheck:"   # a `sources` key: a contradiction check owed to this lesson id
 
 def reconcile(c, new_id):
-    """Compare a new lesson with its nearest neighbours in the same project: `same` folds its votes into the older and
-    retires it as merged; `contradicts` marks the older superseded. Returns False when the check is owed instead:
-    no answer came, or a `--max-calls` budget is spent. The lesson stays active meanwhile, and a `recheck:<id>` row in
-    `sources` holds the debt until `recheck_owed` pays it. Such a check used to be skipped for good: a usage limit
-    that hit mid-run left hundreds of lessons active and never compared with anything."""
-    HANDLED.add(new_id)
-    r = c.execute("SELECT * FROM lessons WHERE id=?", (new_id,)).fetchone()
-    cands = [x for x in search(c, r["text"], r["project"], k=6) if x["id"] != new_id]
-    if cands:
-        if BUDGET["max"] is not None and BUDGET["used"] >= BUDGET["max"]: return owe_check(c, new_id)
+    """`reconcile_many` for one lesson: True when its check is made or not needed, False when it is owed."""
+    return new_id in reconcile_many(c, [new_id])
+
+def reconcile_many(c, ids):
+    """Compare each new lesson with its nearest neighbours in the same project, up to CHECK_GROUP lessons to a call:
+    `same` folds a lesson's votes into the older and retires it as merged; `contradicts` marks the older superseded.
+    Asking one lesson at a time cost a window of transcript a call for every lesson it yielded, about three and a
+    half, against the one call that read it. Returns the ids settled. The rest are owed: their group got no answer,
+    or a `--max-calls` budget is spent. They stay active meanwhile, and a `recheck:<id>` row in `sources` holds each
+    debt until `recheck_owed` pays it; such a check used to be skipped for good. It stops at the first group left
+    unanswered, so a Reflector that is down costs one call, not one per group."""
+    settled, asked = [], []
+    for i in ids:
+        HANDLED.add(i)
+        r = c.execute("SELECT * FROM lessons WHERE id=?", (i,)).fetchone()
+        cands = [x for x in search(c, r["text"], r["project"], k=6) if x["id"] != i]
+        if cands: asked.append((r, cands))
+        else: settled.append(i)
+    groups, owed = [asked[n:n + CHECK_GROUP] for n in range(0, len(asked), CHECK_GROUP)], []
+    for g, group in enumerate(groups):
+        if BUDGET["max"] is not None and BUDGET["used"] >= BUDGET["max"]:
+            owed = groups[g:]; break
         spend()
-        raw = llm(f"NEW: {r['text']}\nCANDIDATES:\n" + "\n".join(f"{x['id']}: {x['text']}" for x in cands), CONTRA_SYS, 300)
-        if raw is None and CFG["llm"] != "none": return owe_check(c, new_id)   # none: keyword-only by choice, owed nothing
+        raw = llm("\n\n".join(f"NEW {r['id']}: {r['text']}\nCANDIDATES:\n" + "\n".join(f"{x['id']}: {x['text']}" for x in cands)
+                               for r, cands in group), CONTRA_SYS, 150 + 120 * len(group))
+        if raw is None and CFG["llm"] != "none":         # none: keyword-only by choice, owed nothing
+            owed = groups[g:]; break
         if raw is not None: BUDGET["answered"] += 1
-        apply_verdict(c, r, cands, parse_json(raw))
-    c.execute("DELETE FROM sources WHERE key=?", (RECHECK + new_id,))
-    return True
+        verdicts = parse_json(raw)
+        verdicts = verdicts if isinstance(verdicts, dict) else {}   # an answer shaped as an array is no verdict
+        if len(group) == 1 and ("same" in verdicts or "contradicts" in verdicts):
+            verdicts = {group[0][0]["id"]: verdicts}                 # one lesson, answered without its id: still its verdict
+        for r, cands in group:
+            if c.execute("SELECT state FROM lessons WHERE id=?", (r["id"],)).fetchone()["state"] == "active":
+                live = [x for x in cands if c.execute("SELECT state FROM lessons WHERE id=?", (x["id"],)).fetchone()["state"] == "active"]
+                apply_verdict(c, r, live, verdicts.get(r["id"]))
+            settled.append(r["id"])
+    for r, _ in (x for group in owed for x in group):
+        set_cursor(c, RECHECK + r["id"], "owed")
+    for i in settled:
+        c.execute("DELETE FROM sources WHERE key=?", (RECHECK + i,))
+    return settled
 
 def apply_verdict(c, r, cands, out):
-    if not isinstance(out, dict): out = {}   # an answer shaped as an array is no verdict, not a crash mid-run
+    """One lesson's verdict, against those of its candidates still active: a lesson merged a moment ago, by an earlier
+    verdict in the same group, can neither absorb this one nor be superseded by it."""
+    if not isinstance(out, dict): out = {}
     for sid in out.get("same", []):
         if any(x["id"] == sid for x in cands):  # merge: fold votes into the older, retire the new
             c.execute("UPDATE lessons SET votes=votes+?, last_seen=? WHERE id=?", (r["votes"], NOW(), sid))
@@ -431,13 +461,12 @@ def owe_check(c, lesson_id):
 def recheck_owed(c):
     """Pay the contradiction checks earlier runs owe, oldest first, before `learn` reads anything new. A lesson merged,
     superseded or archived since is owed nothing. It stops at the first check still unanswered, so a Reflector that
-    is down costs one call here, not one per debt. Returns the lessons it settled."""
+    is down costs one call here, not one per debt. They are asked in groups, as new lessons are. Returns the lessons
+    it settled."""
     c.execute("DELETE FROM sources WHERE key LIKE ? AND substr(key, ?) NOT IN (SELECT id FROM lessons WHERE state='active')",
               (RECHECK + "%", len(RECHECK) + 1))
-    settled = []
-    for (key,) in c.execute("SELECT key FROM sources WHERE key LIKE ? ORDER BY seen, key", (RECHECK + "%",)).fetchall():
-        if not reconcile(c, key[len(RECHECK):]): break
-        settled.append(key[len(RECHECK):])
+    owed = [k[len(RECHECK):] for (k,) in c.execute("SELECT key FROM sources WHERE key LIKE ? ORDER BY seen, key", (RECHECK + "%",))]
+    settled = reconcile_many(c, owed)
     c.commit()
     return settled
 
@@ -520,7 +549,7 @@ def reflector_transcript(path):
     first user turn is the Reflector's instructions. Reading one would reflect a window of another transcript again."""
     with open(path, "rb") as f:
         first = next((t for t in map(line_turn, f) if t and t.startswith("USER: ")), "")
-    return first[len("USER: "):].startswith((REFLECT_SYS[:40], CONTRA_SYS[:40]))
+    return first[len("USER: "):].startswith((REFLECT_SYS[:40], CONTRA_SYS[:40], CONTRA_SYS_BEFORE))
 
 def claude_code_turns(path, start=0):
     """A JSONL transcript → (its turns as one text, end offset), incrementally from a byte offset. The tests' view of
@@ -994,8 +1023,7 @@ def post_ingest(c, new):
     asking twice cost every new lesson two contradiction checks, and once a `--max-calls` budget was spent it
     recorded every lesson of the run as owed, so the next batch paid them all a third time."""
     embed_missing(c)
-    for i, is_new in new:
-        if is_new and i not in HANDLED: reconcile(c, i)
+    reconcile_many(c, [i for i, is_new in dict.fromkeys(new) if is_new and i not in HANDLED])
 
 def checkpoint(c, got):
     """Reconcile and commit one source's lessons before reading the next. A `learn` used to be a single transaction,

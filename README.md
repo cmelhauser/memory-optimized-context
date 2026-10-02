@@ -15,7 +15,7 @@ reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.1.0`. 125 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.1.0`. 129 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. It has run natively against a real store
@@ -29,7 +29,7 @@ since 15 September 2026.
 | Capture from Desktop, web, mobile, Cowork | `memory ingest --export conversations.json` (claude.ai → Settings → Privacy → Export data). Same Reflector. Idempotent per conversation `updated_at`. Claude Desktop also gets live `remember`/`recall` via the MCP server. |
 | Semantic recall | `MEMORY_EMBED=voyage` (or `openai`). Hybrid FTS5 + cosine, fused with RRF. Off by default; keyword search alone works. numpy in the image makes ranking 5,000 lessons a ~20 ms matmul; the stdlib fallback is ~300 ms. |
 | Learn from history | `memory learn --all`: Claude Code transcripts, git commit messages and docs of every repo, notes, claude.ai, ChatGPT and Gemini exports. Incremental by cursor. |
-| Contradiction handling | Every new lesson is compared with its nearest neighbours in the same project. `same` → votes merge. `contradicts` → older lesson marked `superseded_by` newer. ADD-only: nothing is deleted, `search --all` still finds it. |
+| Contradiction handling | Every new lesson is compared with its nearest neighbours in the same project, up to eight new lessons to a call. `same` → votes merge. `contradicts` → older lesson marked `superseded_by` newer. ADD-only: nothing is deleted, `search --all` still finds it. |
 | Automatic pruning | score = (votes + helpful − 2·harmful) × 0.5^(age/90d). Below threshold or harmful ≥ 2 → archived to `archive/YYYY-MM.md`, removed from compiled output, still searchable. |
 | Parallel-safe | One journal file per event (never appended). Single `mkdir` lock around every DB/compiled write. Atomic rename on output. SQLite WAL. |
 
@@ -208,7 +208,7 @@ so running it again will not help until whatever it reported is fixed. An expire
 reads as 2.
 
 `--max-calls N` caps one run at N Reflector calls, counting each one where it is made: a
-reflection, and a contradiction check when a new lesson has neighbours worth comparing it against. The run stops the same way, so a
+reflection, and a contradiction check for up to eight new lessons that have neighbours worth comparing them against. The run stops the same way, so a
 first backfill can be spread out, for example `learn --transcripts --max-calls 60` every few hours.
 
 A contradiction check the budget leaves for later, or one that gets no answer, is owed rather than
@@ -310,7 +310,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       125 tests, six-process concurrency test included
+tests/test_memory.py       129 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
@@ -339,7 +339,7 @@ matching the tree.
 
 ## Costs
 
-One Haiku call per session stop (the ≤ 30k chars of new transcript; two at most, when earlier stops found the lock busy) plus one per new lesson that has neighbours to compare it with, for the contradiction check. Typical day: a few cents on the API, or a negligible slice of a subscription via `claude -p`. Embeddings, if enabled: one call per new lesson.
+One Haiku call per session stop (the ≤ 30k chars of new transcript; two at most, when earlier stops found the lock busy) plus one contradiction check for up to eight of the new lessons that have neighbours to compare them with. Typical day: a few cents on the API, or a negligible slice of a subscription via `claude -p`. Embeddings, if enabled: one call per new lesson.
 
 The first `learn --all` is the expensive run: one call per ~30k window of every transcript, commit
 log and doc set, which for months of history is hundreds of calls. On a subscription that can

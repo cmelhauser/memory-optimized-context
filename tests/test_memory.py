@@ -1462,6 +1462,84 @@ def test_a_new_lesson_is_checked_for_contradictions_once_per_run(m, tmp_path, mo
     assert len([p for p in calls if "CANDIDATES:" in p]) == 1
 
 
+def lessons_with_neighbours(m, n, project="alpha"):
+    """n new lessons, each with an older neighbour that shares its words, so each needs a contradiction check."""
+    new = []
+    with m.db() as c:
+        for k in range(n):
+            m.upsert(c, project, f"widget {k} setting is blue")
+            i, _ = m.upsert(c, project, f"widget {k} setting is blue on tuesdays")
+            new.append(i)
+        c.commit()
+    return new
+
+
+def test_a_windows_lessons_are_checked_in_one_call(m, tmp_path, monkeypatch):
+    """A window of transcript yields about three and a half lessons, and each was checked in a call of its own, so
+    reading the window was the smallest part of what it cost. Up to CHECK_GROUP lessons now share one call."""
+    new = lessons_with_neighbours(m, m.CHECK_GROUP + 2)
+    calls = []
+    monkeypatch.setattr(m, "llm", lambda p, *a, **k: calls.append(p) or "{}")
+    with m.db() as c:
+        assert sorted(m.reconcile_many(c, new)) == sorted(new)
+    assert len(calls) == 2                                                # eight, then two
+    assert calls[0].count("\nCANDIDATES:\n") == m.CHECK_GROUP and all(f"NEW {i}:" in "".join(calls) for i in new)
+
+
+def test_each_lesson_in_a_group_gets_its_own_verdict(m, monkeypatch):
+    """Verdicts are keyed by lesson id. An id the group did not ask about, or a candidate a lesson was not shown, is
+    ignored; two new lessons that duplicate each other merge once, not into each other."""
+    with m.db() as c:
+        old_a, _ = m.upsert(c, "alpha", "deploys go out on tuesdays")
+        old_b, _ = m.upsert(c, "alpha", "the cache lives in redis")
+        a, _ = m.upsert(c, "alpha", "deploys go out on tuesdays after review")
+        b, _ = m.upsert(c, "alpha", "the cache lives in memcached not redis")
+        x, _ = m.upsert(c, "alpha", "deploys go out on tuesdays after the review")
+        c.commit()
+    answer = {a: {"same": [old_a]}, b: {"contradicts": [old_b, "not-shown"]}, x: {"same": [a]}, "stranger": {"same": [old_a]}}
+    monkeypatch.setattr(m, "llm", lambda *a_, **k: json.dumps(answer))
+    with m.db() as c:
+        m.reconcile_many(c, [a, b, x])
+        c.commit()
+        state = {r["id"]: (r["state"], r["superseded_by"]) for r in c.execute("SELECT id, state, superseded_by FROM lessons")}
+    assert state[a] == ("merged", old_a)                                  # folded into the older lesson
+    assert state[old_b] == ("superseded", b) and state[b][0] == "active"
+    assert state[x] == ("active", None)                                   # its match, a, had just been merged away
+    assert state[old_a][0] == "active"
+    with m.db() as c:                                                     # a lesson retired earlier in its own group
+        p, _ = m.upsert(c, "beta", "the build runs at night")
+        q, _ = m.upsert(c, "beta", "the build runs at noon")
+        c.commit()
+    monkeypatch.setattr(m, "llm", lambda *a_, **k: json.dumps({p: {"contradicts": [q]}, q: {"same": [p]}}))
+    with m.db() as c:
+        assert m.reconcile_many(c, [p, q]) == [p, q]
+        c.commit()
+        rows = {r["id"]: (r["state"], r["votes"]) for r in c.execute("SELECT id, state, votes FROM lessons WHERE project='beta'")}
+    assert rows == {p: ("active", 1), q: ("superseded", 1)}             # q's own verdict was not applied
+
+
+def test_a_group_left_unanswered_is_owed_and_the_groups_before_it_are_settled(m, monkeypatch):
+    new = lessons_with_neighbours(m, m.CHECK_GROUP + 3)
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    calls = []
+    monkeypatch.setattr(m, "llm", lambda p, *a, **k: None if calls.append(p) or len(calls) > 1 else "{}")
+    with m.db() as c:
+        settled = m.reconcile_many(c, new)
+        owed = {k[len(m.RECHECK):] for (k,) in c.execute("SELECT key FROM sources WHERE key LIKE 'recheck:%'")}
+    assert len(settled) == m.CHECK_GROUP and owed == set(new) - set(settled) and len(calls) == 2
+    m.BUDGET.update(max=0, used=0)
+    with m.db() as c:
+        assert m.reconcile_many(c, settled) == []                          # a spent budget owes the whole group too
+        assert c.execute("SELECT COUNT(*) FROM sources WHERE key LIKE 'recheck:%'").fetchone()[0] == len(new)
+    m.BUDGET.update(max=None)
+
+
+def test_a_transcript_the_old_one_lesson_check_left_is_still_skipped(m, tmp_path):
+    p = tmp_path / "old.jsonl"
+    transcript(p, [("user", m.CONTRA_SYS_BEFORE + "and the rest of that prompt"), ("assistant", "{}")])
+    assert m.reflector_transcript(p)
+
+
 def test_remember_saves_the_whole_lesson_or_says_why_it_cannot(m, tmp_path, monkeypatch, capsys):
     """The journal is read back with LESSON_RE, so a slug it does not match, or a second line, would vanish after
     the caller was told the lesson was saved."""
@@ -1523,7 +1601,7 @@ def test_a_checkpoint_reconciles_before_it_commits(m, monkeypatch):
     """Committed lessons must be reconciled lessons: a checkpoint that saved without reconciling would leave
     duplicates no later run ever revisits."""
     seen = []
-    monkeypatch.setattr(m, "reconcile", lambda c, i: seen.append(i))
+    monkeypatch.setattr(m, "reconcile_many", lambda c, ids: seen.extend(ids) or ids)
     with m.db() as c:
         first, _ = m.upsert(c, "proj", "one lesson")
         assert m.checkpoint(c, [(first, True), ("old", False)]) == [(first, True), ("old", False)]

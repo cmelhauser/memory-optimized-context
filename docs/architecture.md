@@ -45,7 +45,8 @@ way.
 3. **Ingest.** Each lesson is upserted by `sha1(project | normalised text)[:10]`. An exact
    duplicate is a vote. Nothing is ever overwritten.
 4. **Reconcile.** A new lesson is compared with its nearest neighbours in the same project, up
-   to six; one with none costs no call. A check that gets no answer, or that a `--max-calls`
+   to six; one with none costs no call. Up to eight new lessons share a call, each with its own
+   candidates, and the answer gives each its own verdict. A check that gets no answer, or that a `--max-calls`
    budget leaves for later, is owed: a `recheck:<id>` row in `sources`, paid first by the next
    `learn`.
    `same` folds the new lesson's votes into the older one and retires the new one as `merged`.

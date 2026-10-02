@@ -64,6 +64,15 @@ until the system has run against a real store for at least a month.
 
 ### Changed
 
+- A contradiction check asks about up to eight new lessons in one call, each listed with its
+  own candidates, and the answer gives each lesson its own verdict. One call per lesson made the
+  checks most of what a backfill cost: a window of transcript yields about three and a half
+  lessons, so it cost about four and a half calls where it now costs about one and a half. A
+  verdict applies only against lessons still active, so two new lessons that duplicate each
+  other merge once, and a group left unanswered is owed as a whole.
+  `test_a_windows_lessons_are_checked_in_one_call`,
+  `test_each_lesson_in_a_group_gets_its_own_verdict`,
+  `test_a_group_left_unanswered_is_owed_and_the_groups_before_it_are_settled`.
 - README gives Claude Desktop's config path on Windows as well as macOS.
 - `memory --help` describes every subcommand and every flag; only `learn` had descriptions, and
   most of the other commands' flags had none.
