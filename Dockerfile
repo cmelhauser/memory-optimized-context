@@ -12,4 +12,6 @@ ENV MEMORY_DB=/data/memory.db PYTHONUNBUFFERED=1
 VOLUME /data
 EXPOSE 8765
 ENTRYPOINT ["python3", "/app/memory"]
-CMD ["mcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8765"]   # Compose publishes it on loopback only
+# The container listens beyond itself; Compose publishes it on the host's loopback only. Nothing may follow the
+# array on its line: Docker would no longer read it as JSON and would run it through /bin/sh instead.
+CMD ["mcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8765"]

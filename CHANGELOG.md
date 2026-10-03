@@ -7,6 +7,13 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-03
+
+The first release run against a real store, from 15 September: every transcript a machine holds
+(Claude Code and its subagents, Cursor, Claude Desktop's agent mode, Codex), git repositories,
+notes, and claude.ai, ChatGPT and Gemini exports. The store's schema, `lid()` and the journal
+line format are unchanged since 0.1.0, so an existing `~/memory` needs no migration.
+
 ### Added
 
 - `--export` reads ChatGPT's `conversations.json` and the Gemini Apps activity in a Google
@@ -112,6 +119,11 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- The image's default command, `mcp --transport http`, exited at once and left the container
+  restarting: a comment after the `CMD` array made Docker run it through `/bin/sh`, so the
+  entrypoint was handed `/bin/sh` as its subcommand. CI's container job overrides the command, so
+  only `tools/e2e.sh` saw it. `test_mcp_tools_answer_on_both_mcp_versions_and_transports` now
+  reads `CMD` as JSON.
 - Every new lesson with a neighbour cost two contradiction checks: each source's lessons were
   reconciled as it was committed, and `learn` then reconciled the whole run's lessons again at
   the end. Once a `--max-calls` budget was spent, that second pass recorded every lesson of the

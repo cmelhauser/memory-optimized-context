@@ -1109,7 +1109,10 @@ def test_mcp_tools_answer_on_both_mcp_versions_and_transports(m, monkeypatch):
             assert srv.runs == [{"transport": "streamable-http", "host": "127.0.0.1", "port": 9999}] and srv.kwargs == {}
         else:
             assert srv.runs == [{"transport": "streamable-http"}] and srv.kwargs == {"host": "127.0.0.1", "port": 9999}
-    assert '"--host", "0.0.0.0"' in (REPO / "Dockerfile").read_text()      # the container must listen beyond itself
+    cmd = [ln for ln in (REPO / "Dockerfile").read_text().splitlines() if ln.startswith("CMD ")]
+    assert json.loads(cmd[0][len("CMD "):]) == ["mcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8765"]
+    # exec form or nothing: a comment after the array once made Docker run it through /bin/sh, and the image's
+    # default command became `memory /bin/sh -c ...`, which exits at once and left the container restarting
     tools = srv.tools
     assert tools["recall"]("anything") == "no matches"
     assert tools["remember"]("mcp fact", "p") == "saved to p"
