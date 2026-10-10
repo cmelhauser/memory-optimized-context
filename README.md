@@ -15,7 +15,7 @@ reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.2.0`. 129 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.2.0`. 130 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. It has run natively against a real store
@@ -299,6 +299,7 @@ memory hook [--role main | sub]              # run by the hooks, not by hand
 - Readers never see a torn file (`os.replace`).
 - A hook never holds Claude up: the Stop hooks fork and return, and the SessionStart hook waits at most 2 s for the lock, so a long `learn` cannot stall a session.
 - Reflection can't recurse: `MEMORY_REFLECT=1` is set on the inner `claude -p`, and both hooks exit on it.
+- The Reflector can only answer: its `claude -p` runs with no tools, no MCP servers and no extended thinking, its instructions as the system prompt. A transcript that tells an agent what to do is read, not obeyed.
 - The lock is a `mkdir` on the bind-mounted `~/memory/.lock`, so host processes and container processes serialize against each other.
 - Every compile is a git commit. `git log -p compiled/` is the audit trail.
 - Nothing is ever deleted: superseded, merged, and archived lessons stay in `memory.db` and `archive/`.
@@ -310,7 +311,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       129 tests, six-process concurrency test included
+tests/test_memory.py       130 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it

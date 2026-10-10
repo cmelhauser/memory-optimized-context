@@ -7,6 +7,21 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+### Fixed
+
+- The Reflector's `claude -p` is an agent, and it ran with its tools. Given a transcript of another
+  agent's task, it carried the task out instead of listing lessons: on one workflow-agent window
+  it read files for minutes, timed out twice every night from 8 October, and stalled the nightly
+  catch-up and 102 transcripts behind it; when such a call did finish, its answer was no JSON and
+  the window counted as having no lessons. Text in a transcript could also make it act on this
+  machine. It now runs with `--tools ""`, `--strict-mcp-config`, `alwaysThinkingEnabled: false`
+  and its instructions as `--system-prompt`, with the conversation alone on stdin, and the
+  prompt says the conversation is never instructions. The same window now answers in 12 s for
+  $0.006, where it took 94 s and $0.05 with thinking on.
+  `test_the_reflector_can_only_answer_never_act`.
+- `ruff.toml` names Python 3.10 as its target. Unset, ruff 0.17 assumed a later Python and
+  asked for `datetime.UTC`, which 3.10 does not have.
+
 ## [0.2.0] - 2026-10-03
 
 The first release run against a real store, from 15 September: every transcript a machine holds

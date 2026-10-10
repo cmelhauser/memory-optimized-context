@@ -33,6 +33,8 @@ before editing either.
   same slug for the Stop hook and the backfill; a Claude Code worktree counts as its repository.
   A Cursor, agent-mode or Codex session is filed under the repository it ran in, through
   `repo_of()`, and otherwise under its tool.
+- The Reflector's `claude -p` gets `--tools ""`, `--strict-mcp-config`, no extended thinking, and its
+  instructions through `--system-prompt`; only the conversation goes to stdin.
 - A writer that cannot get the lock raises `LockBusy`; the MCP tools answer "busy" and the
   server keeps running.
 - A lock holder touches `.lock` every 60 s, and only a lock untouched for 600 s is broken as a
