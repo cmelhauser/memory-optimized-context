@@ -6,7 +6,7 @@ two overlap.
 
 ## What this project is
 
-A single-file personal memory system for Claude. `bin/memory` (about 1,100 lines, standard
+A single-file personal memory system for Claude. `bin/memory` (about 1,200 lines, standard
 library only) owns a SQLite store, an append-only journal, a locked compiler, a Reflector that
 calls Claude to extract lessons from transcripts, commits, docs and chat exports, a
 contradiction check, a pruner, hybrid search, and an MCP server. Two shell hooks, sharing `hooks/runner.sh`, connect it to Claude

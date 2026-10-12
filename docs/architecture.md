@@ -95,6 +95,9 @@ Embeddings are off by default. The corpus is dense with exact tokens (`maxconn`,
 - **SQLite:** WAL, 30 s busy timeout, and on a named Docker volume rather than a macOS bind mount.
 - **Recursion:** the Reflector's own `claude -p` runs with `MEMORY_REFLECT=1`; both hooks exit
   immediately when it is set.
+- **The Reflector only answers:** its `claude -p` runs with no tools, no MCP servers and no
+  extended thinking, its instructions as the system prompt and the conversation alone on stdin.
+  A transcript of another agent's task is read, not carried out.
 - **Accepted residual:** two main Claude Code sessions in the same repository share one native
   auto-memory directory. That is Claude Code's race, not this system's; both sessions' journals
   survive independently.
