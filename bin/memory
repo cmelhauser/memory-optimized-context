@@ -12,6 +12,7 @@ Layout ($MEMORY_ROOT, default ~/memory):
   archive/             pruned lessons, one markdown file per month
   exports/             claude.ai, ChatGPT and Gemini exports for `learn --all`; kept out of the store's git
   .lock/               mkdir lock; every write path takes it (.lock.break/ guards breaking a crashed holder's)
+  .reflecting/         one empty directory per transcript a hook is reflecting, so two hooks never read it twice
 
 Subcommands (`memory COMMAND --help` for every flag):
   hook      run by the Claude Code hooks: journal a LESSONS: block, reflect the transcript from its cursor (two
@@ -416,7 +417,13 @@ def reconcile_many(c, ids):
     half, against the one call that read it. Returns the ids settled. The rest are owed: their group got no answer,
     or a `--max-calls` budget is spent. They stay active meanwhile, and a `recheck:<id>` row in `sources` holds each
     debt until `recheck_owed` pays it; such a check used to be skipped for good. It stops at the first group left
-    unanswered, so a Reflector that is down costs one call, not one per group."""
+    unanswered, so a Reflector that is down costs one call, not one per group. The three phases are separate so a
+    hook can ask without holding the lock: `plan_checks` and `settle_checks` need it, `ask_checks` does not."""
+    settled, groups = plan_checks(c, ids)
+    return settle_checks(c, settled, groups, ask_checks(groups))
+
+def plan_checks(c, ids):
+    """The lessons with no neighbour, settled already, and the rest in groups of CHECK_GROUP with their candidates."""
     settled, asked = [], []
     for i in ids:
         HANDLED.add(i)
@@ -424,16 +431,26 @@ def reconcile_many(c, ids):
         cands = [x for x in search(c, r["text"], r["project"], k=6) if x["id"] != i]
         if cands: asked.append((r, cands))
         else: settled.append(i)
-    groups, owed = [asked[n:n + CHECK_GROUP] for n in range(0, len(asked), CHECK_GROUP)], []
-    for g, group in enumerate(groups):
-        if BUDGET["max"] is not None and BUDGET["used"] >= BUDGET["max"]:
-            owed = groups[g:]; break
+    return settled, [asked[n:n + CHECK_GROUP] for n in range(0, len(asked), CHECK_GROUP)]
+
+def ask_checks(groups):
+    """One answer per group, in order, stopping at a spent budget or a group left unanswered; no database access."""
+    answers = []
+    for group in groups:
+        if BUDGET["max"] is not None and BUDGET["used"] >= BUDGET["max"]: break
         spend()
         raw = llm("\n\n".join(f"NEW {r['id']}: {r['text']}\nCANDIDATES:\n" + "\n".join(f"{x['id']}: {x['text']}" for x in cands)
                                for r, cands in group), CONTRA_SYS, 150 + 120 * len(group))
-        if raw is None and CFG["llm"] != "none":         # none: keyword-only by choice, owed nothing
-            owed = groups[g:]; break
+        if raw is None and CFG["llm"] != "none": break   # none: keyword-only by choice, owed nothing
         if raw is not None: BUDGET["answered"] += 1
+        answers.append(raw)
+    return answers
+
+def settle_checks(c, settled, groups, answers):
+    """Apply each answered group's verdicts against what is still active, owe the groups left unanswered, and clear
+    the debts of everything settled. Returns the ids settled."""
+    settled = list(settled)
+    for group, raw in zip(groups, answers, strict=False):   # fewer answers than groups if asking stopped early
         verdicts = parse_json(raw)
         verdicts = verdicts if isinstance(verdicts, dict) else {}   # an answer shaped as an array is no verdict
         if len(group) == 1 and ("same" in verdicts or "contradicts" in verdicts):
@@ -443,7 +460,7 @@ def reconcile_many(c, ids):
                 live = [x for x in cands if c.execute("SELECT state FROM lessons WHERE id=?", (x["id"],)).fetchone()["state"] == "active"]
                 apply_verdict(c, r, live, verdicts.get(r["id"]))
             settled.append(r["id"])
-    for r, _ in (x for group in owed for x in group):
+    for r, _ in (x for group in groups[len(answers):] for x in group):
         set_cursor(c, RECHECK + r["id"], "owed")
     for i in settled:
         c.execute("DELETE FROM sources WHERE key=?", (RECHECK + i,))
@@ -582,6 +599,14 @@ def turn_windows(turns, start, size):
 
 HOOK_WINDOWS = 2   # a Stop hook reflects at most this many windows, oldest first; the rest waits for the next stop
 
+def hook_windows(windows, start):
+    """How many windows a hook reads: HOOK_WINDOWS, or more if the last of them ends inside a turn cut across
+    windows. Stopping there would never move the cursor, and would send the turn's pieces again."""
+    n = HOOK_WINDOWS
+    while n < len(windows) and windows[n - 1][1] == (windows[n - 2][1] if n > 1 else start):
+        n += 1
+    return n
+
 def ingest_transcript(c, path, project, backfill=False):
     """Reflect a transcript from its cursor, window by window, moving the cursor after each, so a ReflectorFailed
     part-way costs none of the windows already reflected. A backfill reads every window. A Stop hook reads at most
@@ -592,15 +617,59 @@ def ingest_transcript(c, path, project, backfill=False):
     start = int(cursor(c, key) or 0)
     turns, end = transcript_turns(path, start)
     windows = turn_windows(turns, start, CFG["transcript_chars"])
-    n = len(windows) if backfill else HOOK_WINDOWS
-    while n < len(windows) and windows[n - 1][1] == (windows[n - 2][1] if n > 1 else start):
-        n += 1   # stopping inside a cut turn would never move the cursor, and would send its pieces again
+    n = len(windows) if backfill else hook_windows(windows, start)
     new = []
     with carrying(new):
         for text, done in windows[:n]:
             new += [upsert(c, p, t) for p, t in reflect(text, project, known_projects(c))]
             set_cursor(c, key, str(done))
     if n >= len(windows): set_cursor(c, key, str(end))
+    return new
+
+REFLECTING = ROOT / ".reflecting"   # one empty directory per transcript a hook is reflecting right now
+CLAIM_STALE = 900                   # a claim older than any hook's reflection belonged to one that died
+HOOK_LOCK_WAIT = 120                # a hook runs in the background, and holds the lock only to write
+
+def claim_transcript(path):
+    """The claim on a transcript a hook is about to reflect, or None if another hook is reflecting it. Two hooks
+    of one session, a stop and a subagent's stop, are handed the same transcript; without a claim both would reflect
+    the same turns, and each lesson would get two votes. A claim older than CLAIM_STALE is a crashed hook's."""
+    REFLECTING.mkdir(parents=True, exist_ok=True)
+    d = REFLECTING / sha(str(path))
+    with suppress(FileNotFoundError):
+        if time.time() - d.stat().st_mtime > CLAIM_STALE: d.rmdir()
+    try: d.mkdir()
+    except FileExistsError: return None
+    return d
+
+def reflect_ahead(path, project):
+    """A Stop hook's reflection, made without the lock: the cursor it started from, each window's lessons with the
+    offset past it, and the transcript's end when every window it holds was read. A hook used to reflect holding the
+    store's lock, 20 to 60 s a call, and every other session or subagent that stopped meanwhile waited 20 s and gave
+    up: about half of all stops in October 2026. A failure keeps the windows answered before it."""
+    key = f"transcript:{path}"
+    with db() as c:
+        start, known = int(cursor(c, key) or 0), known_projects(c)
+    turns, end = transcript_turns(path, start)
+    windows = turn_windows(turns, start, CFG["transcript_chars"])
+    n = hook_windows(windows, start)
+    read, why = [], None
+    try:
+        for text, done in windows[:n]:
+            read.append((reflect(text, project, known), done))
+    except ReflectorFailed as e:
+        why = str(e)
+    return {"key": key, "start": start, "read": read, "end": end if not why and n >= len(windows) else None, "why": why}
+
+def commit_reflection(c, ahead):
+    """Under the lock: keep what `reflect_ahead` read, unless the cursor moved meanwhile, in which case another
+    reader, a `learn`, has those turns, and keeping them as well would count each lesson twice."""
+    if int(cursor(c, ahead["key"]) or 0) != ahead["start"]: return []
+    new = []
+    for pairs, done in ahead["read"]:
+        new += [upsert(c, p, t) for p, t in pairs]
+        set_cursor(c, ahead["key"], str(done))
+    if ahead["end"] is not None: set_cursor(c, ahead["key"], str(ahead["end"]))
     return new
 
 def export_msg_text(m):
@@ -1044,19 +1113,32 @@ def checkpoint(c, got):
 
 # ---------------------------------------------------------------- commands
 def cmd_hook(a):
+    """Journal a LESSONS: block, reflect the transcript's new turns, ingest, reconcile, compile. The Reflector is
+    asked without the lock: the hook takes it twice, briefly, to write what it read and then what the contradiction
+    checks found, so a stop no longer makes every other stop wait on its calls."""
     if os.environ.get("MEMORY_REFLECT"): return          # we are inside our own `claude -p`; do nothing
     j = json.loads(Path(a.input).read_text()) if a.input else json.load(sys.stdin)
     msg = j.get("last_assistant_message", "") or ""
     lines = [ln.strip() for ln in msg.split("LESSONS:", 1)[1].splitlines() if LESSON_RE.match(ln.strip())] if "LESSONS:" in msg else []
     journal_write(lines, a.role)
     project = a.project or project_of(j.get("cwd") or os.getcwd())
-    with Lock(), db() as c:
-        new = ingest_journal(c)
-        tp = j.get("transcript_path")
-        if tp and Path(tp).exists() and CFG["llm"] != "none":
-            try: new += ingest_transcript(c, tp, project)
-            except ReflectorFailed as e: new += e.new; log(f"hook {a.role}: {e}; the rest of the transcript waits for the next stop")
-        post_ingest(c, new); c.commit()
+    tp = j.get("transcript_path")
+    claim = claim_transcript(tp) if tp and Path(tp).exists() and CFG["llm"] != "none" else None
+    try:
+        ahead = reflect_ahead(tp, project) if claim else None
+        if ahead and ahead["why"]: log(f"hook {a.role}: {ahead['why']}; the rest of the transcript waits for the next stop")
+        with Lock(HOOK_LOCK_WAIT), db() as c:
+            new = ingest_journal(c)
+            if ahead: new += commit_reflection(c, ahead)
+            embed_missing(c)
+            settled, groups = plan_checks(c, [i for i, is_new in dict.fromkeys(new) if is_new and i not in HANDLED])
+            c.commit()
+    finally:
+        if claim:
+            with suppress(OSError): claim.rmdir()
+    answers = ask_checks(groups)
+    with Lock(HOOK_LOCK_WAIT), db() as c:
+        settle_checks(c, settled, groups, answers); c.commit()
         n, p = compile_(c); c.commit()
     log(f"hook {a.role}: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned")
 

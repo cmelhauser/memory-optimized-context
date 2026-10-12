@@ -34,7 +34,9 @@ way.
 1. **Capture.** A Claude Code `Stop` or `SubagentStop` hook writes the hook JSON to a temp file,
    forks `memory hook`, and returns. `memory hook` journals any `LESSONS:` block from the last
    assistant message, then hands the transcript's new turns to the Reflector: at most two ~30k
-   windows, oldest first, so a session that outran its stops is caught up, not skipped.
+   windows, oldest first, so a session that outran its stops is caught up, not skipped. The
+   Reflector is asked with no lock held; the hook takes the lock only to store what it was
+   told and, later, to settle the contradiction checks.
 2. **Reflect.** Claude Haiku reads the transcript since the last byte offset and returns a JSON
    array of `{project, text}` lessons. The offset is stored so the next stop reflects only what
    is new. The same Reflector runs over claude.ai and ChatGPT `conversations.json` exports, keyed
@@ -90,7 +92,9 @@ Embeddings are off by default. The corpus is dense with exact tokens (`maxconn`,
 - **Lock:** `mkdir .lock` on the bind-mounted store, so host and container processes serialise
   against the same directory. Waits up to 20 s (2 s for the SessionStart hook's
   `ingest --wait 2`), then gives up with `LockBusy`; the MCP tools answer "busy" instead of
-  stopping. Breaks a lock older than 10 minutes.
+  stopping. Breaks a lock older than 10 minutes. A Stop hook waits up to 120 s, and holds the
+  lock only to store its lessons and to settle contradiction checks, never across a Reflector
+  call; `.reflecting/` holds one claim per transcript a hook is reflecting.
 - **Outputs:** `.tmp` sibling then `os.replace`. A reader never sees a torn file.
 - **SQLite:** WAL, 30 s busy timeout, and on a named Docker volume rather than a macOS bind mount.
 - **Recursion:** the Reflector's own `claude -p` runs with `MEMORY_REFLECT=1`; both hooks exit

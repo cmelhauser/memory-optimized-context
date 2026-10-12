@@ -9,6 +9,13 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A Stop hook no longer holds the store's lock while the Reflector answers. It did, for 20 to 60 s a
+  call, and every other session or subagent that stopped meanwhile waited 20 s and gave up: about
+  half of all stops in October 2026. A hook now reflects with no lock held, takes the lock to store
+  what was answered and again to settle the contradiction checks, and waits up to 120 s for it. A
+  claim per transcript in `.reflecting/` keeps a stop and a subagent's stop from reflecting the same
+  turns twice, and a hook whose transcript another reader advanced meanwhile discards what it read.
+  `test_a_hook_asks_the_reflector_without_holding_the_lock`.
 - The Reflector's `claude -p` is an agent, and it ran with its tools. Given a transcript of another
   agent's task, it carried the task out instead of listing lessons: on one workflow-agent window
   it read files for minutes, timed out twice every night from 8 October, and stalled the nightly

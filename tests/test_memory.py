@@ -1571,6 +1571,81 @@ def test_a_transcript_the_old_one_lesson_check_left_is_still_skipped(m, tmp_path
     assert m.reflector_transcript(p)
 
 
+def hook_on(m, tmp_path, turns, role="main"):
+    """Run the Stop hook over a transcript of `turns`, as Claude Code would."""
+    tp = tmp_path / "session.jsonl"
+    if not tp.exists(): transcript(tp, turns, cwd="/home/me/GitHub/alpha")
+    payload = tmp_path / "hook.json"
+    payload.write_text(json.dumps({"transcript_path": str(tp), "cwd": "/home/me/GitHub/alpha", "last_assistant_message": ""}))
+    m.cmd_hook(types.SimpleNamespace(role=role, input=str(payload), project=None))
+    return tp
+
+
+def test_a_hook_asks_the_reflector_without_holding_the_lock(m, tmp_path, monkeypatch):
+    """A hook held the store's lock while the Reflector answered, 20 to 60 s a call, and every other session or
+    subagent that stopped meanwhile waited 20 s and gave up: about half of all stops. The lock is now held only to
+    write, so it is free whenever the Reflector or a contradiction check is being asked."""
+    with m.db() as c:
+        m.upsert(c, "alpha", "deploys go out on tuesdays"); c.commit()
+    seen = []
+    def reflector(prompt, *a, **k):
+        seen.append((("CANDIDATES:" in prompt), m.LOCK.exists()))
+        if "CANDIDATES:" in prompt: return "{}"
+        return json.dumps([{"project": "alpha", "text": "deploys go out on tuesdays after review"}])
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    monkeypatch.setattr(m, "llm", reflector)
+    hook_on(m, tmp_path, [("user", "when do deploys go out?"), ("assistant", "tuesdays, after review")])
+    assert [check for check, _ in seen] == [False, True]                 # one reflection, then one check
+    assert not any(locked for _, locked in seen)
+    assert not m.LOCK.exists() and not any(m.REFLECTING.iterdir())       # nothing left behind
+    with m.db() as c:
+        assert c.execute("SELECT COUNT(*) FROM lessons WHERE text LIKE '%after review'").fetchone()[0] == 1
+
+
+def test_a_transcript_another_hook_is_reflecting_is_left_to_it(m, tmp_path, monkeypatch):
+    """A stop and a subagent's stop are handed the same transcript; reading it twice would vote each lesson twice."""
+    calls = []
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    tp = tmp_path / "session.jsonl"
+    transcript(tp, [("user", "a question"), ("assistant", "an answer")], cwd="/home/me/GitHub/alpha")
+    held = m.claim_transcript(tp)                                         # another hook is mid-reflection
+    hook_on(m, tmp_path, [])
+    assert calls == [] and held.exists()
+    old = time.time() - m.CLAIM_STALE - 10                                # until that hook is long dead
+    os.utime(held, (old, old))
+    hook_on(m, tmp_path, [])
+    assert len([p for p in calls if "<conversation>" in p]) == 1 and not held.exists()
+
+
+def test_turns_another_reader_took_meanwhile_are_not_counted_again(m, tmp_path, monkeypatch):
+    """Between the hook's reflection and its write, a `learn` may read the same turns and move the cursor. The
+    hook then keeps nothing, rather than vote each lesson a second time."""
+    tp = tmp_path / "session.jsonl"
+    transcript(tp, [("user", "a question"), ("assistant", "an answer")], cwd="/home/me/GitHub/alpha")
+    def reflector(prompt, *a, **k):
+        with m.db() as c:                                                 # a learn finishes the transcript meanwhile
+            m.set_cursor(c, f"transcript:{tp}", str(tp.stat().st_size)); c.commit()
+        return json.dumps([{"project": "alpha", "text": "a lesson read twice"}])
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    monkeypatch.setattr(m, "llm", reflector)
+    hook_on(m, tmp_path, [])
+    with m.db() as c:
+        assert c.execute("SELECT COUNT(*) FROM lessons").fetchone()[0] == 0
+
+
+def test_a_hook_keeps_the_windows_answered_before_a_failure(m, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli", transcript_chars=200))
+    calls = []
+    monkeypatch.setattr(m, "llm", failing_llm(calls, 1))                  # the first window answered, the second not
+    turns = [("user" if i % 2 == 0 else "assistant", f"marker{i:03d} " + "x" * 60) for i in range(12)]
+    tp = hook_on(m, tmp_path, turns)
+    with m.db() as c:
+        first = int(m.cursor(c, f"transcript:{tp}"))
+        assert 0 < first < tp.stat().st_size and c.execute("SELECT COUNT(*) FROM lessons").fetchone()[0] == 1
+    assert "the rest of the transcript waits for the next stop" in capsys.readouterr().err
+
+
 def test_remember_saves_the_whole_lesson_or_says_why_it_cannot(m, tmp_path, monkeypatch, capsys):
     """The journal is read back with LESSON_RE, so a slug it does not match, or a second line, would vanish after
     the caller was told the lesson was saved."""

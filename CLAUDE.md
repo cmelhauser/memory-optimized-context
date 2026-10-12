@@ -20,6 +20,8 @@ before editing either.
 
 - A journal file is created with `open(path, "x")` and is never opened for writing again.
 - Every write to `compiled/` or the database happens inside `with Lock():`.
+- A Stop hook asks the Reflector with no lock held (`reflect_ahead`, `ask_checks`); it takes the
+  lock only to store the answers, and a `.reflecting/` claim keeps two hooks off one transcript.
 - `compiled/*.md` are written to a `.tmp` sibling and `os.replace`d.
 - `cmd_hook` returns without side effects when `MEMORY_REFLECT` is set.
 - Six concurrent `hook` processes journaling the same lesson produce a vote count of exactly
