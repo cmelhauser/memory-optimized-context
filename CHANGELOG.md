@@ -9,6 +9,16 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A lesson was last seen when it was read, not when it was written. A backfill reads weeks of
+  transcripts in a day, so every old lesson looked new, no lesson had aged, and which of the
+  hundreds of one-vote lessons reached a capped `compiled/` file came down to the order they were
+  read in. A transcript's lessons now carry its modification time, a journal entry its file's, a
+  claude.ai or ChatGPT chat its update time and Gemini activity the time of its last record; a time
+  ahead of the clock counts as now. A lesson met again keeps the newest `last_seen` and the oldest
+  `first_seen`. Documents and commits are still stamped when read.
+  `test_a_transcript_backfilled_late_ages_from_when_it_was_written`.
+- `hook.log` could not be placed in time, so nothing could say whether a change had lessened lock
+  contention. Each hook run now opens its output with a dated `== time stop|session start` line.
 - A Stop hook no longer holds the store's lock while the Reflector answers. It did, for 20 to 60 s a
   call, and every other session or subagent that stopped meanwhile waited 20 s and gave up: about
   half of all stops in October 2026. A hook now reflects with no lock held, takes the lock to store

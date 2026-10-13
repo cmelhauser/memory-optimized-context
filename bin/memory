@@ -161,15 +161,36 @@ def norm(t):
 def lid(project, text):
     return hashlib.sha1(f"{project}|{norm(text)}".encode()).hexdigest()[:10]
 
+SEEN = {"at": None}   # when what is being read was written; None is now, as for a Stop hook's turn
+
+def stamp(when):
+    """An epoch number or ISO text as UTC ISO seconds, as NOW() writes them, never later than now; None if it is neither."""
+    if isinstance(when, (int, float)) and not isinstance(when, bool):
+        try: t = datetime.fromtimestamp(when, timezone.utc)
+        except (OverflowError, OSError, ValueError): return None
+    else:
+        t = instant(when) if when else None
+    return None if t is None else min(t, datetime.now(timezone.utc)).isoformat(timespec="seconds")
+
+@contextmanager
+def seen_at(when):
+    """Lessons upserted inside are last seen when their source was written, not when it was read. A backfill reads
+    weeks of transcripts in a day; stamping them all with that day made every old lesson look new, and left the
+    ranking of one-vote lessons to the order they were read in."""
+    before = SEEN["at"]; SEEN["at"] = stamp(when)
+    try: yield
+    finally: SEEN["at"] = before
+
 def upsert(c, project, text):
-    """ADD-only. Exact duplicate → +1 vote. Returns (id, is_new)."""
+    """ADD-only. Exact duplicate → +1 vote. Returns (id, is_new). Its time is the source's, inside `seen_at`."""
     project = project.lower(); text = text.strip()
-    i = lid(project, text); now = NOW()
+    i = lid(project, text); seen = SEEN["at"] or NOW()
     row = c.execute("SELECT id FROM lessons WHERE id=?", (i,)).fetchone()
     if row:
-        c.execute("UPDATE lessons SET votes=votes+1, last_seen=?, state=CASE WHEN state='archived' THEN 'active' ELSE state END WHERE id=?", (now, i))
+        c.execute("UPDATE lessons SET votes=votes+1, last_seen=MAX(last_seen,?), first_seen=MIN(first_seen,?), "
+                  "state=CASE WHEN state='archived' THEN 'active' ELSE state END WHERE id=?", (seen, seen, i))
         return i, False
-    c.execute("INSERT INTO lessons(id,project,text,first_seen,last_seen) VALUES(?,?,?,?,?)", (i, project, text, now, now))
+    c.execute("INSERT INTO lessons(id,project,text,first_seen,last_seen) VALUES(?,?,?,?,?)", (i, project, text, seen, seen))
     c.execute("INSERT INTO fts(id,project,text) VALUES(?,?,?)", (i, project, text))
     return i, True
 
@@ -517,9 +538,10 @@ def ingest_journal(c):
     for p in sorted(JOURNAL.glob("**/*.md")):
         key = f"journal:{p.relative_to(JOURNAL)}"
         if key in seen: continue
-        for line in p.read_text(errors="ignore").splitlines():
-            m = LESSON_RE.match(line.strip())
-            if m: new.append(upsert(c, m.group(1), m.group(2)))
+        with seen_at(p.stat().st_mtime):
+            for line in p.read_text(errors="ignore").splitlines():
+                m = LESSON_RE.match(line.strip())
+                if m: new.append(upsert(c, m.group(1), m.group(2)))
         c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, "", NOW()))
     return new
 
@@ -619,7 +641,7 @@ def ingest_transcript(c, path, project, backfill=False):
     windows = turn_windows(turns, start, CFG["transcript_chars"])
     n = len(windows) if backfill else hook_windows(windows, start)
     new = []
-    with carrying(new):
+    with carrying(new), seen_at(Path(path).stat().st_mtime):
         for text, done in windows[:n]:
             new += [upsert(c, p, t) for p, t in reflect(text, project, known_projects(c))]
             set_cursor(c, key, str(done))
@@ -720,7 +742,7 @@ def ingest_claude_ai(c, convs):
             if cursor(c, key) == upd: continue
             text = "\n\n".join(f"{m.get('sender','').upper()}: {t}" for m in cv.get("chat_messages", []) if (t := export_msg_text(m)))
             title = f"[a claude.ai conversation: {cv['name']}]\n" if cv.get("name") else ""
-            got = reflect_chat(c, title, text, "claude-ai")
+            with seen_at(upd): got = reflect_chat(c, title, text, "claude-ai")
             set_cursor(c, key, upd)
             new += checkpoint(c, got)
     return new
@@ -752,7 +774,7 @@ def ingest_chatgpt(c, convs):
             key = f"chatgpt:{cv.get('conversation_id') or cv.get('id')}"; upd = str(cv.get("update_time") or "")
             if cursor(c, key) == upd: continue
             title = f"[a ChatGPT conversation: {cv['title']}]\n" if cv.get("title") else ""
-            got = reflect_chat(c, title, "\n\n".join(chatgpt_turns(cv)), "chatgpt")
+            with seen_at(cv.get("update_time")): got = reflect_chat(c, title, "\n\n".join(chatgpt_turns(cv)), "chatgpt")
             set_cursor(c, key, upd)
             new += checkpoint(c, got)
     return new
@@ -797,7 +819,7 @@ def ingest_gemini(c, records):
     start = cursor(c, key) or ""
     with carrying(new):
         for text, done in turn_windows(gemini_turns(records, instant(start)), start, CFG["transcript_chars"]):
-            got = [upsert(c, p, t) for p, t in reflect(text, "gemini", known_projects(c))]
+            with seen_at(done): got = [upsert(c, p, t) for p, t in reflect(text, "gemini", known_projects(c))]
             set_cursor(c, key, done)
             new += checkpoint(c, got)
     return new

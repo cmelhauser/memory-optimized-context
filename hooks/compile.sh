@@ -5,5 +5,6 @@
 [ -n "$MEMORY_REFLECT" ] && exit 0
 # shellcheck source=hooks/runner.sh
 . "$(dirname "$0")/runner.sh"
+echo "== $(date -u +%FT%TZ) session start" >>"$HOME/memory/hook.log"
 $RUN ingest --wait 2 </dev/null >>"$HOME/memory/hook.log" 2>&1
 exit 0

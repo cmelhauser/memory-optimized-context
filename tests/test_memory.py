@@ -11,6 +11,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import runpy
 import shutil
 import sqlite3
@@ -20,6 +21,7 @@ import threading
 import time
 import types
 import urllib.error
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -592,6 +594,9 @@ def test_hook_scripts_pass_through_to_runner(m, tmp_path):
     time.sleep(0.5)
     text = log.read_text()
     assert "hook --role sub" in text and "ingest" in text
+    heads = (tmp_path / "memory" / "hook.log").read_text().splitlines()      # each run is dated, to measure by the day
+    assert any(re.fullmatch(r"== \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ stop sub", h) for h in heads)
+    assert any(re.fullmatch(r"== \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ session start", h) for h in heads)
 
 
 def test_sqlite_fts5_available():
@@ -2327,3 +2332,95 @@ def test_bootstrap_dry_run_touches_nothing(tmp_path):
     env = {**os.environ, "HOME": str(tmp_path)}
     out = subprocess.run(["bash", str(REPO / "tools" / "bootstrap.sh"), "--dry-run"], env=env, capture_output=True, text=True, check=True).stdout
     assert out.startswith("would copy") and not any(tmp_path.iterdir())
+
+
+
+# ------------------------------------------------------------------ a lesson's age is its source's
+
+
+def seen_of(m, text):
+    with m.db() as c:
+        r = c.execute("SELECT first_seen, last_seen, votes FROM lessons WHERE text=?", (text,)).fetchone()
+    return r["first_seen"][:10], r["last_seen"][:10], r["votes"]
+
+
+def days_ago(n):
+    return (datetime.now(timezone.utc) - timedelta(days=n)).strftime("%Y-%m-%d")
+
+
+def test_stamp_reads_epoch_and_iso_times_and_never_the_future(m):
+    assert m.stamp(1700000000.5) == "2023-11-14T22:13:20+00:00"
+    assert m.stamp("2023-11-14T22:13:20.5Z") == "2023-11-14T22:13:20+00:00"
+    assert m.stamp("2023-11-14T22:13:20") == "2023-11-14T22:13:20+00:00"                 # no zone: UTC
+    assert m.stamp(10 ** 18) is None and m.stamp(True) is None                          # not a time
+    assert m.stamp("yesterday") is None and m.stamp("") is None and m.stamp(None) is None
+    assert m.stamp(time.time() + 10 * 86400) <= m.NOW()                                 # a clock that ran ahead
+    assert m.stamp("2999-01-01T00:00:00Z") <= m.NOW()
+
+
+def test_a_transcript_backfilled_late_ages_from_when_it_was_written(m, tmp_path, monkeypatch):
+    """A backfill reads weeks of transcripts in a day. Stamped with that day, every old lesson looked new, and which
+    of several hundred one-vote lessons reached compiled/ was the order they were read in."""
+    old, new = tmp_path / "old.jsonl", tmp_path / "new.jsonl"
+    transcript(old, [("user", "set maxconn"), ("assistant", "done")])
+    transcript(new, [("user", "set backlog"), ("assistant", "done")])
+    os.utime(old, (time.time() - 100 * 86400,) * 2)
+    monkeypatch.setattr(m, "llm", fake_llm([{"project": "node", "text": "maxconn=1024"}], {}))
+    with m.db() as c:
+        m.ingest_transcript(c, old, "node")
+    monkeypatch.setattr(m, "llm", fake_llm([{"project": "node", "text": "maxconn=1024"},
+                                            {"project": "node", "text": "backlog=511"}], {}))
+    with m.db() as c:
+        m.ingest_transcript(c, new, "node")
+    assert seen_of(m, "maxconn=1024") == (days_ago(100), days_ago(0), 2)   # seen again today: first and last differ
+    assert seen_of(m, "backlog=511") == (days_ago(0), days_ago(0), 1)
+    assert m.SEEN["at"] is None                                               # the time does not outlive its source
+
+
+def test_an_older_source_neither_pulls_last_seen_back_nor_moves_first_seen_forward(m, tmp_path, monkeypatch):
+    fresh, old = tmp_path / "fresh.jsonl", tmp_path / "old.jsonl"
+    for p, text in ((fresh, "set it"), (old, "set it again")):
+        transcript(p, [("user", text), ("assistant", "done")])
+    os.utime(fresh, (time.time() - 5 * 86400,) * 2)
+    os.utime(old, (time.time() - 50 * 86400,) * 2)
+    monkeypatch.setattr(m, "llm", fake_llm([{"project": "node", "text": "maxconn=1024"}], {}))
+    with m.db() as c:
+        m.ingest_transcript(c, fresh, "node")
+        m.ingest_transcript(c, old, "node")
+    assert seen_of(m, "maxconn=1024") == (days_ago(50), days_ago(5), 2)
+
+
+def test_a_source_dated_in_the_future_is_taken_as_today(m, tmp_path, monkeypatch):
+    p = tmp_path / "t.jsonl"
+    transcript(p, [("user", "set maxconn"), ("assistant", "done")])
+    os.utime(p, (time.time() + 30 * 86400,) * 2)
+    monkeypatch.setattr(m, "llm", fake_llm([{"project": "node", "text": "maxconn=1024"}], {}))
+    with m.db() as c:
+        m.ingest_transcript(c, p, "node")
+    assert seen_of(m, "maxconn=1024") == (days_ago(0), days_ago(0), 1)
+
+
+def test_a_journal_entry_ages_from_its_file(m):
+    journal(m, ["[node] maxconn=1024"])
+    f = m.JOURNAL / "claude-ai" / "n.md"
+    os.utime(f, (time.time() - 20 * 86400,) * 2)
+    run_ingest(m)
+    assert seen_of(m, "maxconn=1024") == (days_ago(20), days_ago(20), 1)
+
+
+def test_exported_chats_age_from_their_last_update(m, tmp_path, monkeypatch):
+    """claude.ai's `updated_at`, ChatGPT's `update_time`, and for Gemini the time of the last record in the window."""
+    monkeypatch.setattr(m, "llm", lambda prompt, system="", max_tokens=0: json.dumps(
+        [{"project": "x", "text": "lesson " + ("claude" if "claude.ai" in prompt else "chatgpt" if "ChatGPT" in prompt else "gemini")}]))
+    claude = [{"uuid": "u1", "name": "Db", "updated_at": "2026-03-01T10:00:00.123456Z",
+               "chat_messages": [{"sender": "human", "text": "hello"}]}]
+    chatgpt = [{"conversation_id": "c1", "title": "Tabs", "update_time": 1700000000.5, "current_node": "u1",
+                "mapping": {"root": {"parent": None, "message": None},
+                            "u1": chatgpt_node("root", "user", {"content_type": "text", "parts": ["hello"]})}}]
+    gem = [gemini("Prompted a question", "2026-03-02T09:00:00.500Z", "<p>An answer</p>")]
+    with m.db() as c:
+        for name, data in (("c.json", claude), ("g.json", chatgpt), ("m.json", gem)):
+            (tmp_path / name).write_text(json.dumps(data)); m.ingest_export(c, tmp_path / name)
+    assert seen_of(m, "lesson claude")[:2] == ("2026-03-01", "2026-03-01")
+    assert seen_of(m, "lesson chatgpt")[:2] == ("2023-11-14", "2023-11-14")
+    assert seen_of(m, "lesson gemini")[:2] == ("2026-03-02", "2026-03-02")

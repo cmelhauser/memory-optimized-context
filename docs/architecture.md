@@ -55,6 +55,8 @@ way.
    `contradicts` marks the older lesson `superseded` by the new one. Both stay in the database.
 5. **Prune.** `score = (votes + helpful - 2*harmful) * 0.5^(age_days/90)`. Below 0.15, or
    `harmful >= 2`, moves a lesson to `archived` and appends it to `archive/YYYY-MM.md`.
+   Age runs from `last_seen`, the time the lesson's source was written (a transcript's, journal
+   file's or chat's), so a backfill does not make old lessons look new.
 6. **Compile.** Active lessons, sorted by score, capped at 150 lines per file, written to
    `compiled/PLAYBOOK.md` (project `all`) and `compiled/projects/<slug>.md` via `.tmp` then
    `os.replace`. Then one git commit.
