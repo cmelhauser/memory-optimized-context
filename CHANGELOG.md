@@ -13,9 +13,9 @@ until the system has run against a real store for at least a month.
   the image), so there is no manual dispatch and no second run when the tested commit reaches `main`;
   that was about 13 job-runs a change and is 5. Python 3.11 is dropped from the matrix and the release
   check, the coverage gate is measured on 3.12 only, the lint job installs only the linters and calls
-  actionlint from pip rather than through a third-party action, the image is built with `docker build`
-  instead of buildx and a layer cache that took longer to set up than the build, and the documentation
-  check runs once, inside pytest.
+  actionlint from pip rather than through a third-party action, and the documentation check runs
+  once, inside pytest. The image build keeps buildx and its layer cache: without them it took 43 s
+  against 32 s.
 
 ### Fixed
 
