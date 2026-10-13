@@ -278,6 +278,14 @@ memory hook [--role main | sub]              # run by the hooks, not by hand
 
 `memory --help` and `memory COMMAND --help` describe every flag.
 
+### Watching the hooks
+
+The hooks append to `~/memory/hook.log`. Each run opens its output with a dated line,
+`== 2026-10-13T14:02:11Z stop main` or `== … session start`, so a line below it can be placed in
+time. To see whether hooks are losing the lock, count the lines saying "the lock was held" after a
+date: a Stop hook waits up to 120 s for it and the SessionStart hook 2 s, so a few SessionStart
+lines during a long `learn` are expected and a Stop hook's are not.
+
 ## Environment
 
 | Var | Default | Notes |

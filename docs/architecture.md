@@ -56,10 +56,13 @@ way.
 5. **Prune.** `score = (votes + helpful - 2*harmful) * 0.5^(age_days/90)`. Below 0.15, or
    `harmful >= 2`, moves a lesson to `archived` and appends it to `archive/YYYY-MM.md`.
    Age runs from `last_seen`, the time the lesson's source was written (a transcript's, journal
-   file's or chat's), so a backfill does not make old lessons look new.
+   file's or chat's; a document's or commit's is the time it was read), so a backfill does not make
+   old lessons look new. A lesson met again keeps its newest `last_seen` and oldest `first_seen`.
 6. **Compile.** Active lessons, sorted by score, capped at 150 lines per file, written to
    `compiled/PLAYBOOK.md` (project `all`) and `compiled/projects/<slug>.md` via `.tmp` then
-   `os.replace`. Then one git commit.
+   `os.replace`. Then one git commit. A project with more active lessons than the cap shows only
+   its top 150 here; the rest are in the database and reached by `search` and the MCP `recall`.
+   Search is full-text (BM25) unless an embedding provider is set.
 7. **Deliver.** Claude Code reads the project file through an `@` import in `CLAUDE.md`.
    claude.ai reads `compiled/` through the Google Drive connector. Claude Desktop and Claude
    Code can also call `recall` on the MCP server mid-session.

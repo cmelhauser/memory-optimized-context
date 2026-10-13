@@ -9,6 +9,8 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- `README.md` explains how to read the dated `hook.log`; `docs/architecture.md` says what the 150-line
+  cap hides and that search is full-text without an embedding provider.
 - A lesson was last seen when it was read, not when it was written. A backfill reads weeks of
   transcripts in a day, so every old lesson looked new, no lesson had aged, and which of the
   hundreds of one-vote lessons reached a capped `compiled/` file came down to the order they were

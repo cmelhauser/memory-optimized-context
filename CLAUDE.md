@@ -75,6 +75,8 @@ before editing either.
 - A `recheck:<id>` row in `sources` is a contradiction check owed to an active lesson: it got no
   answer, or the budget ran out. The next `learn` pays it first; the hooks and `ingest` never do,
   because the SessionStart hook runs in the foreground.
+- `hook.log` has a dated `== time stop|session start` line before each hook run's output; lines under it
+  belong to that run, though concurrent runs can interleave. It has no other timestamps.
 - A Stop hook reads at most two windows of new transcript. A session that outran its stops while
   the lock was busy is caught up by its next stops or by `learn --transcripts`; its cursor never
   moves past what was read.
