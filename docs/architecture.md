@@ -81,6 +81,15 @@ Four, collapsed into one table with a `state` column:
 The original plan had four tables. One table with a state column and a project column does the
 same job with no joins.
 
+## Size
+
+Lessons are one sentence each, so the store stays small. A store of several thousand active lessons
+is a database of the order of ten megabytes, and the merged and superseded lessons kept beside
+them are a minor part of that, mostly duplicates of a sentence already stored once. That is why
+nothing is deleted and there is no vacuum command. What grows is the number of lessons per
+project, and `compiled/` caps that at `MEMORY_MAX_LINES` per file, ranked by score; the rest are
+reached through `search` and the MCP `recall`.
+
 ## Retrieval
 
 FTS5 BM25 over `text`, top 30, fused by reciprocal rank with an optional cosine pass over

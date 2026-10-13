@@ -9,6 +9,7 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- `docs/architecture.md` says, in general terms, how large a store gets and why nothing is vacuumed.
 - `README.md` explains how to read the dated `hook.log`; `docs/architecture.md` says what the 150-line
   cap hides and that search is full-text without an embedding provider.
 - A lesson was last seen when it was read, not when it was written. A backfill reads weeks of
