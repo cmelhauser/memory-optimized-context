@@ -7,6 +7,16 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+### Changed
+
+- CI runs less for the same assurance. A pull request now runs everything (lint, 3.10, 3.12 and 3.13,
+  the image), so there is no manual dispatch and no second run when the tested commit reaches `main`;
+  that was about 13 job-runs a change and is 5. Python 3.11 is dropped from the matrix and the release
+  check, the coverage gate is measured on 3.12 only, the lint job installs only the linters and calls
+  actionlint from pip rather than through a third-party action, the image is built with `docker build`
+  instead of buildx and a layer cache that took longer to set up than the build, and the documentation
+  check runs once, inside pytest.
+
 ### Fixed
 
 - `docs/architecture.md` says, in general terms, how large a store gets and why nothing is vacuumed.
