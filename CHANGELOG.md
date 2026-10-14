@@ -9,6 +9,14 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A review of the nightly scripts found that every failure other than exit 2 was logged as an ordinary night
+  with no alert: a missing or crashed interpreter (127, a traceback) or a store whose lock was held through
+  every try could go unnoticed for as long as it lasted. Those now write `needs-attention` and notify, and a
+  night that stopped part-way clears an old alert, since the Reflector answered. The installer writes a
+  well-formed agent file for a checkout path with `&` or `<` in it, checks it with `plutil -lint` before
+  installing, waits for the old job to go before bootstrapping and retries once, quotes the cron line's
+  path for the shell and for `%`, rejects `--hour` or `--calls` without a value or beyond 999999 with the
+  usage line, and `--uninstall` works off macOS.
 - A review of the source-time change found three gaps. `stamp` kept the offset of the time it was given, and
   `upsert` compares those times as text, which orders them only if they share one offset: a lesson met again from a
   source stamped `+14:00` could take the wrong `last_seen` or `first_seen`. They are always UTC now. Folding a

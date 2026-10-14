@@ -39,20 +39,31 @@ for _ in 1 2 3 4 5 6; do
   sleep "$RETRY_WAIT"                                           # a hook or another run holds the store; try again
 done
 
+alert () {   # alert "what happened" "what to do": the log, the alert file, and a notification where there is one
+  why=$(grep -E '^(memory|\[memory\]|Traceback|[A-Za-z]*Error)' "$out" | tail -n 1 | cut -c1-300)
+  { echo "== $(date '+%F %T') STOPPED: $1"
+    echo "==   ${why:-no reason was logged} (exit $rc)"
+    echo "==   $2"
+  } >> "$LOG"
+  { date '+%F %T'; echo "$1"; echo "$why"; } > "$ALERT"
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e 'display notification "The catch-up did not run as it should. See backfill.log." with title "memory nightly catch-up"' >/dev/null 2>&1 || true
+  fi
+}
+
 case "$rc" in
   0) rm -f "$ALERT"; echo "== $(date '+%F %T') nightly catch-up finished: everything read" >> "$LOG" ;;
-  2)
-    why=$(grep -E '^(memory|\[memory\])' "$out" | tail -n 1 | cut -c1-300)
-    { echo "== $(date '+%F %T') STOPPED: the Reflector answered nothing at all, so this run read nothing."
-      echo "==   ${why:-no reason was logged}"
-      echo "==   Check it with: echo 'Say OK' | claude -p --output-format json --no-session-persistence"
-      echo "==   An expired login or a spent monthly limit is the usual cause. The job stays scheduled."
-    } >> "$LOG"
-    { date '+%F %T'; echo "$why"; } > "$ALERT"
-    if command -v osascript >/dev/null 2>&1; then
-      osascript -e 'display notification "It read nothing: the Reflector is not answering. See backfill.log." with title "memory nightly catch-up"' >/dev/null 2>&1 || true
-    fi
-    ;;
-  *) echo "== $(date '+%F %T') nightly catch-up stopped part-way (exit $rc); tomorrow carries on" >> "$LOG" ;;
+  2) alert "the Reflector answered nothing at all, so this run read nothing." \
+           "Check it with: echo 'Say OK' | claude -p --output-format json --no-session-persistence. An expired login or a spent monthly limit is the usual cause. The job stays scheduled." ;;
+  *)
+    # 1 is a spent budget or a usage limit, which `learn` reports and tomorrow resumes. Anything else is not: an
+    # interpreter that is missing (127) or crashed, or a store whose lock was held through every try.
+    if [ "$rc" -ge 3 ] || grep -q "Traceback" "$out" || grep -q "lock was held" "$out"; then
+      alert "the catch-up failed for a reason that is not a spent budget." \
+            "Run it by hand to see why: $0. The job stays scheduled."
+    else
+      rm -f "$ALERT"       # the Reflector answered, or this run would have exited 2
+      echo "== $(date '+%F %T') nightly catch-up stopped part-way (exit $rc); tomorrow carries on" >> "$LOG"
+    fi ;;
 esac
 exit "$rc"

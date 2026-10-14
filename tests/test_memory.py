@@ -2485,7 +2485,12 @@ def test_the_nightly_catch_up_notifies_when_it_can(tmp_path):
 def fake_tools(tmp_path, system):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
-    for name, body in (("uname", f"echo {system}"), ("launchctl", f'echo "$@" >> {tmp_path / "launchctl.log"}')):
+    # `print` fails: the old job is already gone, so the installer need not wait for it. A first `bootstrap` fails when
+    # asked to, as it does on a reinstall that comes too soon after the bootout.
+    flag, failed = tmp_path / "fail-bootstrap", tmp_path / "failed"
+    launchctl = (f'if [ "$1" = print ]; then exit 1; fi\necho "$@" >> {tmp_path / "launchctl.log"}\n'
+                 f'if [ "$1" = bootstrap ] && [ -e {flag} ] && [ ! -e {failed} ]; then touch {failed}; exit 5; fi')
+    for name, body in (("uname", f"echo {system}"), ("launchctl", launchctl)):
         (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
         (bin_dir / name).chmod(0o755)
     return {**os.environ, "HOME": str(tmp_path), "PATH": f"{bin_dir}:{os.environ['PATH']}"}
@@ -2512,7 +2517,8 @@ def test_install_nightly_writes_a_launchd_agent_from_this_checkouts_location(tmp
 
 def test_install_nightly_prints_a_cron_line_off_macos(tmp_path):
     r = install_nightly(fake_tools(tmp_path, "Linux"), "--hour", "2")
-    assert r.returncode == 0 and f"0 2 * * * CALLS=60 /bin/bash '{REPO}/tools/nightly_catchup.sh'" in r.stdout
+    line = next(ln for ln in r.stdout.splitlines() if ln.startswith("0 2 "))
+    assert r.returncode == 0 and line.startswith("0 2 * * * CALLS=60 /bin/bash ") and line.endswith("tools/nightly_catchup.sh")
     assert not (tmp_path / "Library").exists()
 
 
@@ -2735,4 +2741,54 @@ def test_the_newer_source_wins_a_contradiction_whichever_was_read_last(m):
         states = dict(c.execute("SELECT id, state FROM lessons").fetchall())
         assert states == {newer: "active", older: "superseded"}
         assert c.execute("SELECT superseded_by FROM lessons WHERE id=?", (older,)).fetchone()[0] == newer
+
+
+def test_the_nightly_catch_up_raises_the_alarm_for_a_failure_that_is_not_a_spent_budget(m, tmp_path):
+    """Exit 1 is a spent budget or a usage limit, which tomorrow resumes. A missing interpreter (127), a traceback or a
+    lock held through every try used to read as the same benign night, and went unnoticed for as long as it lasted."""
+    for name in ("t", "l"):
+        (tmp_path / name).mkdir()
+    for n, (fake, wanted) in enumerate([(tmp_path / "no-such-interpreter", "exit 127"),
+                                        (fake_memory(tmp_path / "t", 1, ["Traceback (most recent call last):", "ValueError: no"]), "ValueError"),
+                                        (fake_memory(tmp_path / "l", 1, ["memory: the lock was held for all of 20 s"]), "lock was held")]):
+        box = tmp_path / f"run{n}"
+        box.mkdir()
+        rc, log, alert = run_nightly(box, fake)
+        assert rc != 0 and "STOPPED: the catch-up failed" in log and wanted in alert.read_text() + log, (n, log)
+
+
+def test_a_part_way_night_clears_an_old_alert_because_the_reflector_answered(m, tmp_path):
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "needs-attention").write_text("an earlier night\n")
+    rc, log, alert = run_nightly(tmp_path, fake_memory(tmp_path, 1, ["[memory] stopped early: budget"]))
+    assert rc == 1 and "stopped part-way" in log and not alert.exists()
+
+
+def test_install_nightly_writes_well_formed_xml_for_any_path_and_cron_for_any_path(tmp_path):
+    odd = tmp_path / "R&D <x> 'y' 100%" / "tools"
+    odd.mkdir(parents=True)
+    shutil.copy(REPO / "tools" / "install_nightly.sh", odd)
+    env = fake_tools(tmp_path, "Darwin")
+    out = subprocess.run(["bash", str(odd / "install_nightly.sh"), "--dry-run"], env=env, capture_output=True, text=True, timeout=30, check=False).stdout
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(out.split(":\n", 1)[1])                                 # a bare & or < would not parse
+    assert str(odd) in [e.text for e in root.iter("string")][2]
+    linux = fake_tools(tmp_path, "Linux")
+    cron = subprocess.run(["bash", str(odd / "install_nightly.sh")], env=linux, capture_output=True, text=True, timeout=30, check=False).stdout
+    assert "100\\%" in cron and "\\'y\\'" in cron                                # quoted for the shell, and % for cron
+
+
+def test_install_nightly_retries_a_bootstrap_that_fails_and_uninstalls_off_macos(tmp_path):
+    env = fake_tools(tmp_path, "Darwin")
+    (tmp_path / "fail-bootstrap").write_text("")
+    r = install_nightly(env)
+    assert r.returncode == 0 and (tmp_path / "launchctl.log").read_text().count("bootstrap") == 2
+    gone = install_nightly(fake_tools(tmp_path, "Linux"), "--uninstall")
+    assert gone.returncode == 0 and "no launchd agent" in gone.stdout
+
+
+@pytest.mark.parametrize("args", [["--hour"], ["--calls"], ["--calls", "1234567"], ["--hour", "100"]])
+def test_install_nightly_says_what_is_wrong_with_a_missing_or_absurd_value(tmp_path, args):
+    r = install_nightly(fake_tools(tmp_path, "Darwin"), *args)
+    assert r.returncode == 2 and r.stderr
 

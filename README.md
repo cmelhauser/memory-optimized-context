@@ -15,7 +15,7 @@ reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.2.1`. 166 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.2.1`. 174 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. It has run natively against a real store
@@ -306,9 +306,10 @@ tools/install_nightly.sh --uninstall
 The agent's file is written from this checkout's location when you run it. The run logs to
 `~/.local/share/memory-optimized-context/backfill.log` and tries again while a hook holds the lock. Its
 exit status is `learn`'s: 0 when everything was read, 1 when a budget or a usage limit stopped it
-part-way (the next night carries on), 2 when the Reflector answered nothing, which also writes
-`needs-attention` beside the log and posts a macOS notification. An expired login or a spent limit is the
-usual cause; `echo 'Say OK' | claude -p --output-format json --no-session-persistence` shows which.
+part-way (the next night carries on), 2 when the Reflector answered nothing. That, and any failure that
+is not a spent budget (a missing interpreter, a traceback, a lock held through every try), also writes
+`needs-attention` beside the log and posts a macOS notification; a good night removes it. An expired login
+or a spent limit is the usual cause of exit 2; `echo 'Say OK' | claude -p --output-format json --no-session-persistence` shows which.
 
 ## Environment
 
@@ -343,7 +344,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       166 tests, six-process concurrency test included
+tests/test_memory.py       174 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, install_nightly.sh, nightly_catchup.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
