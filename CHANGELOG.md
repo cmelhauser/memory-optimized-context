@@ -7,6 +7,8 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-13
+
 ### Added
 
 - `tools/install_nightly.sh` and `tools/nightly_catchup.sh`: a nightly `learn --transcripts` that reads the

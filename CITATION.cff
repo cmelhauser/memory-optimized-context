@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use this project, please cite it as below."
 title: "memory-optimized-context"
 type: software
-version: "0.2.0"
-date-released: 2026-10-03
+version: "0.2.1"
+date-released: 2026-10-13
 repository-code: "https://github.com/cmelhauser/memory-optimized-context"
 authors:
   - name: "The memory-optimized-context authors"

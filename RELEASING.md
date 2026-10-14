@@ -53,7 +53,8 @@ A tag asserts that the repository was in a releasable state at that commit. All 
 this order:
 
 1. `tools/run_ci_locally.sh --image` and `tools/e2e.sh` clean.
-2. CI green on `main` at that commit, including the `container` job.
+2. CI green for that commit, including the `container` job: a fast-forward merge puts the
+   pull request's tested commit on `main`, so the pull request's run is the run.
 3. `CITATION.cff` `version:` equals the tag without the `v`.
 4. `CHANGELOG.md` has a `## [x.y.z]` section for it, and `[Unreleased]` is empty.
 
@@ -82,10 +83,10 @@ the Human Author asking for it.** Tagging is the routine act; publishing is not.
 ## For agents
 
 - Never commit to `main`. Branch, open a pull request, let CI run.
-- `container` does not run on pull requests, so **a green pull request is not a green
-  release**; run `tools/run_ci_locally.sh --image` before merging anything that touches the
-  Dockerfile or the Compose file, and `tools/e2e.sh` before merging anything that touches the
-  hooks, the Dockerfile, the Compose file or the Reflector.
+- A pull request's CI run is the whole verdict (lint, Python 3.10, 3.12 and 3.13, the image),
+  but it does not start the image's default command or exercise the hooks end to end: run
+  `tools/e2e.sh` before merging anything that touches the hooks, the Dockerfile, the Compose
+  file or the Reflector, and before every release.
 - Never create a tag to mark work finished.
 - If you change `lid()`, the schema, or the journal regex, that is a MAJOR release and needs a
   migration in `bin/memory` before anything is tagged.
