@@ -51,7 +51,8 @@ CFG = {
 }
 def NOW():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-SLUG = r"[a-z0-9][a-z0-9._-]{0,63}"                # at most 64: `compile_` makes it a filename, and the OS refuses a long one
+SLUG_MAX = 64                                      # `compile_` makes a slug a filename, and the OS refuses a long one
+SLUG = rf"[a-z0-9][a-z0-9._-]{{0,{SLUG_MAX - 1}}}"
 LESSON_RE = re.compile(rf"^\[({SLUG})\]\s+(.+?)\s*$", re.I)
 PROJECT_RE = re.compile(SLUG)                      # a slug is a name, so never a path
 LESSON_MAX = 500                                   # characters: a lesson is a sentence, and it is imported into every session
@@ -555,6 +556,7 @@ def apply_verdict(c, r, cands, out):
             last = dict(c.execute("SELECT id, last_seen FROM lessons WHERE id IN (?, ?)", (r["id"], cid)).fetchall())
             old, new = (r["id"], cid) if last[cid] > last[r["id"]] else (cid, r["id"])
             c.execute("UPDATE lessons SET state='superseded', superseded_by=? WHERE id=?", (new, old))
+            if old == r["id"]: return    # this lesson lost: it supersedes nothing else, being no longer active itself
 
 def owe_check(c, lesson_id):
     set_cursor(c, RECHECK + lesson_id, "owed")
@@ -927,7 +929,7 @@ def lesson_line(project, text):
     """A journal line for one remembered lesson, or (None, why not). The journal is read back with LESSON_RE, so a
     slug it does not match, or a lesson's second line, would be dropped in silence after the caller was told the
     lesson was saved."""
-    p = as_project(project, ""); t = " ".join(str(text).split())
+    p = as_project(project, ""); t = clean_lesson(text)
     if not p: return None, f"{project!r} is not a project slug: lower-case letters or digits, then . _ - as well"
     if not t: return None, "the lesson is empty"
     return f"[{p}] {t}", None
@@ -971,7 +973,7 @@ def git_ok(repo, *args):
 
 def repo_slug(path):
     top = git(path, "rev-parse", "--show-toplevel").strip() or str(path)
-    return Path(top).name.lower()
+    return Path(top).name.lower()[:SLUG_MAX]
 
 def take_docs(c, files, key_of, name_of):
     """Upsert each changed file's `[proj] fact` lines now; return its prose for the Reflector and a callback that marks
@@ -1033,7 +1035,7 @@ def project_of(cwd):
     lowercased. A Claude Code worktree (<repo>/.claude/worktrees/<name>) belongs to <repo>, whose
     CLAUDE.md is the one that imports compiled/projects/<slug>.md."""
     m = re.search(r"([^/]+)/\.claude/worktrees/", str(cwd))
-    return (m.group(1) if m else Path(cwd).name).lower() or "all"
+    return (m.group(1) if m else Path(cwd).name).lower()[:SLUG_MAX] or "all"
 
 def line_cwd(raw):
     """The `cwd` on one transcript line; None for a line without one, or one that is not a JSON object. Claude Code

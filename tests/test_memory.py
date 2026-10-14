@@ -2823,3 +2823,35 @@ def test_a_lesson_met_again_from_an_old_source_is_archived_once_a_month(m):
         c.commit(); m.compile_(c); c.commit()
     assert sum(f.read_text().count("an old lesson") for f in m.ARCHIVE.glob("*.md")) == 1
 
+
+# ------------------------------------------------------------------ what the last review left
+
+
+def test_a_lesson_that_loses_a_contradiction_supersedes_nothing_else(m):
+    """A new lesson from an old source can lose to one candidate it contradicts; being then no longer active, it
+    must not go on to retire another candidate in the same verdict, which nothing active would replace."""
+    with m.db() as c:
+        newer = lesson_from(m, c, "2025-06-01T00:00:00Z", "Always use tabs")
+        older = lesson_from(m, c, "2023-01-01T00:00:00Z", "Indent with two spaces")
+        read = lesson_from(m, c, "2024-01-01T00:00:00Z", "Never use tabs")
+        rows = {i: c.execute("SELECT * FROM lessons WHERE id=?", (i,)).fetchone() for i in (newer, older, read)}
+        m.settle_checks(c, [], [[(rows[read], [rows[newer], rows[older]])]],
+                        [json.dumps({read: {"same": [], "contradicts": [newer, older]}})])
+        assert dict(c.execute("SELECT id, state FROM lessons").fetchall()) == {newer: "active", older: "active", read: "superseded"}
+
+
+def test_a_long_folder_name_is_a_slug_that_compiles(m, tmp_path):
+    assert m.project_of("/work/" + "A" * 100) == "a" * 64
+    repo = git_repo(tmp_path / ("r" * 100), "x")
+    assert m.repo_slug(repo) == "r" * 64 and m.as_project(m.repo_slug(repo), "d") == "r" * 64
+
+
+def test_a_remembered_lesson_is_reported_as_saved_only_as_it_will_be_stored(m):
+    line, why = m.lesson_line("p", "w" * 900)
+    assert why is None and len(line) == len("[p] ") + m.LESSON_MAX
+
+
+def test_install_nightly_rejects_a_budget_of_zero_however_it_is_written(tmp_path):
+    r = install_nightly(fake_tools(tmp_path, "Darwin"), "--calls", "00")
+    assert r.returncode == 2 and "positive" in r.stderr
+

@@ -9,6 +9,13 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A fresh review of the 0.2.2 fixes found four small gaps. A new lesson from an old source that lost one
+  contradiction went on to retire another candidate in the same verdict, though it was no longer active to
+  replace it: it stops at its first loss. A repository folder name longer than the new 64-character slug limit
+  was never compiled: the slug is cut to 64. `remember` could say a 900-character lesson was saved as written
+  when `upsert` stored 500 characters of it: it now reports the line as it will be stored. `install_nightly.sh
+  --calls 00` passed as a budget of zero, which every night would alert on.
+  `test_a_lesson_that_loses_a_contradiction_supersedes_nothing_else`.
 - Gemini activity is cut into pieces like a transcript, and they shared one cursor too: a failure part-way
   through a long record re-sent the pieces already answered and double-voted them. Its cursor, a time, now reads
   `<time>|<k>` inside such a record. A lesson that was archived, met again from an old source and pruned again

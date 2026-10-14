@@ -27,6 +27,7 @@ case "$calls" in ''|*[!0-9]*|0) echo "--calls must be a positive number" >&2; ex
 [ "${#hour}" -le 2 ] && [ "$((10#$hour))" -le 23 ] || { echo "--hour must be a number from 0 to 23" >&2; exit 2; }
 [ "${#calls}" -le 6 ] || { echo "--calls must be at most 999999" >&2; exit 2; }
 hour=$((10#$hour)); calls=$((10#$calls))
+[ "$calls" -ge 1 ] || { echo "--calls must be a positive number" >&2; exit 2; }
 xml () { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }   # a path is text in an XML file
 
 if [ "$uninstall" = 1 ]; then
