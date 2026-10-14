@@ -7,6 +7,8 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-14
+
 ### Fixed
 
 - A review of the nightly scripts found that every failure other than exit 2 was logged as an ordinary night
