@@ -7,6 +7,12 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+### Added
+
+- `memory status`: what the store holds and owes, the last nightly run (and its alert, if any), whether the lock is held,
+  and how the Stop and SessionStart hooks have done over the last seven days, from the dated `hook.log`. Read-only,
+  so it answers during a long `learn`.
+
 ### Fixed
 
 - A review of the adapters and the MCP server found these, each reproduced. A symlink in a cloned repository or a

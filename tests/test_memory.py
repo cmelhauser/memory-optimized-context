@@ -2959,3 +2959,42 @@ def test_the_http_server_refuses_a_host_it_was_not_told_to_expect(m):
             return client.post("/mcp", json=body, headers=headers).status_code
     assert status("evil.example") == 421 and status("localhost") != 421
 
+
+# ------------------------------------------------------------------ memory status
+
+
+def test_status_reports_the_store_what_it_owes_the_nightly_job_and_the_hooks(m, tmp_path, monkeypatch, capsys):
+    state = tmp_path / "state"
+    state.mkdir()
+    monkeypatch.setenv("MEMORY_STATE_DIR", str(state))
+    with m.db() as c:
+        first, _ = m.upsert(c, "p", "pin image tags")
+        m.upsert(c, "q", "another fact")
+        m.set_cursor(c, m.RECHECK + first, "owed")
+        c.execute("UPDATE lessons SET helpful=1 WHERE id=?", (first,))
+    capsys.readouterr()
+    m.cmd_status(types.SimpleNamespace())
+    out = capsys.readouterr().out
+    assert "2 active lessons in 2 projects" in out and "1 marked helpful" in out and "1 contradiction check(s): the next" in out
+    assert "lock       free" in out and "no run logged" in out and "no dated runs" in out and "ALERT" not in out
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    (state / "backfill.log").write_text("== 2026-10-13 03:00:00 nightly catch-up start\n[memory] learn: +3 new\n"
+                                        "== 2026-10-14 03:04:00 nightly catch-up finished: everything read\n")
+    (state / "needs-attention").write_text("2026-10-14 03:04:00\nthe Reflector answered nothing\n")
+    (m.ROOT / "hook.log").write_text(
+        "[memory] an undated line\nmemory: the lock was held for all of 20 s\n"
+        "== 2020-01-01T00:00:00Z stop main\nmemory: the lock was held for all of 20 s\n"      # too old to count
+        f"== {today}T10:00:00Z stop main\n[memory] hook main: +1 new\n"
+        f"== {today}T10:01:00Z stop sub\nmemory: the lock was held for all of 120 s\n"
+        f"== {today}T10:02:00Z session start\n")
+    m.LOCK.mkdir()
+    m.cmd_status(types.SimpleNamespace())
+    out = capsys.readouterr().out
+    assert "lock       held" in out and "nightly    2026-10-14 03:04:00 nightly catch-up finished" in out
+    assert "ALERT      2026-10-14 03:04:00 the Reflector answered nothing" in out
+    assert "hooks      last 7 days: 1 session start runs, 0 lost the lock, 2 stop runs, 1 lost the lock" in out
+    runs, held = m.hook_health(m.ROOT / "hook.log")
+    assert runs == {"stop": 2, "session start": 1} and held == {"stop": 1}
+    assert m.hook_health(m.ROOT / "no-such.log") == ({}, {})
+    m.LOCK.rmdir()
+

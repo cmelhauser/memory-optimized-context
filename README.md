@@ -15,7 +15,7 @@ reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.2.3`. 190 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.2.3`. 191 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. It has run natively against a real store
@@ -273,6 +273,7 @@ if you made the venv) or `docker exec memory python3 /app/memory` (Docker).
 memory search "query" [--project slug] [-k 8] [--all]
 memory remember "fact" --project slug        # refuses a slug that is not a slug, and keeps every line
 memory vote <id> --helpful | --harmful       # exits non-zero if no lesson has that id
+memory status                                # the store, what it owes, the nightly job, the hooks; read-only, no lock
 memory ingest [--transcript PATH --project slug] [--export FILE] [--wait SECONDS]
 memory learn [--all [--repos DIR] [--exports DIR]] [--repo PATH [--since DATE]] [--notes DIR [--project slug]]
              [--transcripts] [--transcripts-from DIR] [--export FILE] [--max-calls N]
@@ -345,7 +346,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       190 tests, six-process concurrency test included
+tests/test_memory.py       191 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, install_nightly.sh, nightly_catchup.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it

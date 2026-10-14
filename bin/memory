@@ -32,7 +32,7 @@ Subcommands (`memory COMMAND --help` for every flag):
 import argparse, hashlib, html, json, math, os, re, shutil, sqlite3, subprocess, sys, tempfile, threading, time, urllib.request
 from array import array
 from contextlib import contextmanager, suppress
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # ---------------------------------------------------------------- config
@@ -1319,6 +1319,46 @@ def cmd_remember(a):
         new = ingest_journal(c); post_ingest(c, new); c.commit(); compile_(c); c.commit()
     log(f"remembered → {p.name}")
 
+HOOK_HEAD = re.compile(r"^== (\d{4}-\d\d-\d\d)T\S+ (stop|session start)\b")
+
+def hook_health(path, days=7):
+    """(runs, lock-held lines) per kind of hook run over the last `days` days of hook.log, whose runs open with a
+    dated `== time what` line. The lines beneath a run belong to it; those before the first dated line are undated."""
+    since, runs, held, kind = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d"), {}, {}, None
+    for line in Path(path).read_text(errors="replace").splitlines() if Path(path).exists() else []:
+        m = HOOK_HEAD.match(line)
+        if m:
+            kind = m[2] if m[1] >= since else None
+            if kind: runs[kind] = runs.get(kind, 0) + 1
+        elif kind and "lock was held" in line:
+            held[kind] = held.get(kind, 0) + 1
+    return runs, held
+
+def cmd_status(a):
+    """What the store holds, what it owes, and how the nightly job and the hooks have done. Read-only: it takes no lock,
+    so it answers during a long `learn`."""
+    with db() as c:
+        states = dict(c.execute("SELECT state, count(*) FROM lessons GROUP BY 1").fetchall())
+        projects = c.execute("SELECT count(DISTINCT project) FROM lessons WHERE state='active'").fetchone()[0]
+        owed = c.execute("SELECT count(*) FROM sources WHERE key LIKE ?", (RECHECK + "%",)).fetchone()[0]
+        helpful = c.execute("SELECT count(*) FROM lessons WHERE helpful>0").fetchone()[0]
+    print(f"store      {ROOT}: {states.get('active', 0)} active lessons in {projects} projects "
+          f"({states.get('archived', 0)} archived, {states.get('merged', 0)} merged, {states.get('superseded', 0)} superseded), "
+          f"{DB.stat().st_size // 1024 // 1024} MB, {helpful} marked helpful")
+    print(f"owed       {owed} contradiction check(s)" + (": the next `learn` pays them" if owed else ""))
+    print("lock       " + ("held: a `learn` or a hook is writing" if LOCK.exists() else "free"))
+    state = Path(os.environ.get("MEMORY_STATE_DIR") or Path.home() / ".local" / "share" / "memory-optimized-context")
+    nightly = [ln for ln in (state / "backfill.log").read_text(errors="replace").splitlines() if "nightly catch-up" in ln] \
+        if (state / "backfill.log").exists() else []
+    print("nightly    " + (nightly[-1].removeprefix("== ") if nightly else "no run logged"))
+    if (state / "needs-attention").exists():
+        print("ALERT      " + " ".join((state / "needs-attention").read_text().split())[:200] + f"  ({state / 'backfill.log'})")
+    runs, held = hook_health(ROOT / "hook.log")
+    if runs:
+        print("hooks      last 7 days: " + ", ".join(f"{n} {k} runs, {held.get(k, 0)} lost the lock" for k, n in sorted(runs.items())))
+    else:
+        print("hooks      no dated runs in the last 7 days (hook.log is dated from 0.2.1)")
+
 def cmd_vote(a):
     col = "helpful" if a.helpful else "harmful"
     with Lock(), db() as c:
@@ -1428,6 +1468,8 @@ def main():
     s.add_argument("text", help="the lesson, one line")
     s.add_argument("--project", default="all", help="project slug (default all)")
     s.set_defaults(f=cmd_remember)
+    s = sp.add_parser("status", help="what the store holds and owes, and how the nightly job and the hooks have done (read-only)")
+    s.set_defaults(f=cmd_status)
     s = sp.add_parser("vote", help="mark a lesson helpful or harmful; harmful twice archives it")
     s.add_argument("id", help="the lesson's id, as search prints it")
     g = s.add_mutually_exclusive_group(required=True)
