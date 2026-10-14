@@ -9,6 +9,9 @@ until the system has run against a real store for at least a month.
 
 ### Added
 
+- Each `hook`, `ingest` and `learn` log line ends with the Reflector calls it made and the dollars `claude -p` reported
+  for them, and `memory status` totals the hooks' for the last seven days. Nothing recorded what the Reflector cost
+  before, so there was nothing to reduce it against.
 - `memory status`: what the store holds and owes, the last nightly run (and its alert, if any), whether the lock is held,
   and how the Stop and SessionStart hooks have done over the last seven days, from the dated `hook.log`. Read-only,
   so it answers during a long `learn`.

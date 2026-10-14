@@ -297,6 +297,7 @@ def llm(prompt, system="You are a precise assistant. Output only what is asked."
         if not isinstance(res, dict): return r.stdout
         if res.get("is_error") or res.get("subtype", "success") != "success":   # the CLI's own verdict, not only its exit status
             return no_answer(f"claude -p reported an error: {cli_reason(r)}")
+        if isinstance(res.get("total_cost_usd"), (int, float)): BUDGET["cost"] += res["total_cost_usd"]
         return res.get("result") or ""
     return no_answer("no Reflector: needs ANTHROPIC_API_KEY with `anthropic` installed, or `claude` on PATH")
 
@@ -436,7 +437,13 @@ def stopping(new):
     except ReflectorFailed as e:
         new += e.new; failed.append(e)
 
-BUDGET = {"max": None, "used": 0, "answered": 0}   # `used`: every call, for `learn --max-calls`; `answered`: for the exit code
+# `used`: every call, for `learn --max-calls`; `answered`: for the exit code; `cost`: the dollars the CLI reported
+BUDGET = {"max": None, "used": 0, "answered": 0, "cost": 0.0}
+
+def spent():
+    """`; 7 Reflector calls, $0.046` for a log line, or nothing if the run made none. The dollars are what `claude -p`
+    reports for each call, so they are there on the CLI path and not on the SDK's."""
+    return f"; {BUDGET['used']} Reflector calls, ${BUDGET['cost']:.3f}" if BUDGET["used"] else ""
 
 def spend():
     """Charge one Reflector call. Counting what is actually asked, rather than one per reflection plus one per lesson
@@ -1254,7 +1261,7 @@ def cmd_hook(a):
     with Lock(HOOK_LOCK_WAIT), db() as c:
         settle_checks(c, settled, groups, answers); c.commit()
         n, p = compile_(c); c.commit()
-    log(f"hook {a.role}: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned")
+    log(f"hook {a.role}: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned{spent()}")
 
 STOPPED = "memory: {} stopped early: {}. What was read is kept and compiled; run it again to resume."
 
@@ -1274,7 +1281,7 @@ def cmd_ingest(a):
             if a.export: new += ingest_export(c, a.export)
         post_ingest(c, new); c.commit()
         n, p = compile_(c); c.commit()
-    log(f"ingest: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned")
+    log(f"ingest: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned{spent()}")
     if failed: stop_early("ingest", failed[0])
 
 def cmd_learn(a):
@@ -1286,7 +1293,7 @@ def cmd_learn(a):
                                 ("--export", opt("export"), False)):
         missing = [r for r in paths or [] if r and not (Path(r).expanduser().is_dir() if folder else Path(r).expanduser().is_file())]
         if missing: sys.exit(f"memory: learn {flag}: no such {'folder' if folder else 'file'}: {', '.join(missing)}")   # a typo must not pass for success
-    BUDGET.update(max=a.max_calls, used=0, answered=0)
+    BUDGET.update(max=a.max_calls, used=0, answered=0, cost=0.0)
     with Lock(), db() as c:
         new = ingest_journal(c)
         recheck_owed(c)                          # checks earlier runs could not make come first; the hooks never pay them
@@ -1298,7 +1305,7 @@ def cmd_learn(a):
             for e in a.export or []: new += ingest_export(c, e)
         post_ingest(c, new); c.commit()
         n, p = compile_(c); c.commit()
-    log(f"learn: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned")
+    log(f"learn: +{sum(1 for _,x in new if x)} new, {n} active, {p} pruned{spent()}")
     if failed: stop_early("learn", failed[0])
 
 def cmd_compile(a):
@@ -1321,10 +1328,13 @@ def cmd_remember(a):
 
 HOOK_HEAD = re.compile(r"^== (\d{4}-\d\d-\d\d)T\S+ (stop|session start)\b")
 
+SPENT_LINE = re.compile(r"; (\d+) Reflector calls, \$(\d+\.\d+)")
+
 def hook_health(path, days=7):
     """(runs, lock-held lines) per kind of hook run over the last `days` days of hook.log, whose runs open with a
-    dated `== time what` line. The lines beneath a run belong to it; those before the first dated line are undated."""
-    since, runs, held, kind = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d"), {}, {}, None
+    dated `== time what` line, and (Reflector calls, dollars) the hooks logged. The lines beneath a run belong to it;
+    those before the first dated line are undated."""
+    since, runs, held, kind, spend_ = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d"), {}, {}, None, [0, 0.0]
     for line in Path(path).read_text(errors="replace").splitlines() if Path(path).exists() else []:
         m = HOOK_HEAD.match(line)
         if m:
@@ -1332,7 +1342,9 @@ def hook_health(path, days=7):
             if kind: runs[kind] = runs.get(kind, 0) + 1
         elif kind and "lock was held" in line:
             held[kind] = held.get(kind, 0) + 1
-    return runs, held
+        elif kind and (s := SPENT_LINE.search(line)):
+            spend_[0] += int(s[1]); spend_[1] += float(s[2])
+    return runs, held, spend_
 
 def cmd_status(a):
     """What the store holds, what it owes, and how the nightly job and the hooks have done. Read-only: it takes no lock,
@@ -1353,9 +1365,10 @@ def cmd_status(a):
     print("nightly    " + (nightly[-1].removeprefix("== ") if nightly else "no run logged"))
     if (state / "needs-attention").exists():
         print("ALERT      " + " ".join((state / "needs-attention").read_text().split())[:200] + f"  ({state / 'backfill.log'})")
-    runs, held = hook_health(ROOT / "hook.log")
+    runs, held, (calls, dollars) = hook_health(ROOT / "hook.log")
     if runs:
         print("hooks      last 7 days: " + ", ".join(f"{n} {k} runs, {held.get(k, 0)} lost the lock" for k, n in sorted(runs.items())))
+        print(f"reflector  the hooks made {calls} Reflector calls in those 7 days, ${dollars:.2f}")
     else:
         print("hooks      no dated runs in the last 7 days (hook.log is dated from 0.2.1)")
 

@@ -15,7 +15,7 @@ reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.2.3`. 191 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.2.3`. 192 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. It has run natively against a real store
@@ -289,9 +289,11 @@ memory hook [--role main | sub]              # run by the hooks, not by hand
 
 The hooks append to `~/memory/hook.log`. Each run opens its output with a dated line,
 `== 2026-10-13T14:02:11Z stop main` or `== … session start`, so a line below it can be placed in
-time. To see whether hooks are losing the lock, count the lines saying "the lock was held" after a
+time. `memory status` summarises the last seven days. To see whether hooks are losing the lock, count the lines saying "the lock was held" after a
 date: a Stop hook waits up to 120 s for it and the SessionStart hook 2 s, so a few SessionStart
-lines during a long `learn` are expected and a Stop hook's are not.
+lines during a long `learn` are expected and a Stop hook's are not. Each `hook`, `ingest` and `learn` line
+ends with the Reflector calls it made and the dollars `claude -p` reported for them (`; 7 Reflector calls,
+$0.046`; none on the SDK path), so what a night or a day costs can be read off the log.
 
 ### A nightly catch-up
 
@@ -346,7 +348,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       191 tests, six-process concurrency test included
+tests/test_memory.py       192 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, install_nightly.sh, nightly_catchup.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it

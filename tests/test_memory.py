@@ -2984,7 +2984,7 @@ def test_status_reports_the_store_what_it_owes_the_nightly_job_and_the_hooks(m, 
     (m.ROOT / "hook.log").write_text(
         "[memory] an undated line\nmemory: the lock was held for all of 20 s\n"
         "== 2020-01-01T00:00:00Z stop main\nmemory: the lock was held for all of 20 s\n"      # too old to count
-        f"== {today}T10:00:00Z stop main\n[memory] hook main: +1 new\n"
+        f"== {today}T10:00:00Z stop main\n[memory] hook main: +1 new, 2 active, 0 pruned; 3 Reflector calls, $0.020\n"
         f"== {today}T10:01:00Z stop sub\nmemory: the lock was held for all of 120 s\n"
         f"== {today}T10:02:00Z session start\n")
     m.LOCK.mkdir()
@@ -2993,8 +2993,26 @@ def test_status_reports_the_store_what_it_owes_the_nightly_job_and_the_hooks(m, 
     assert "lock       held" in out and "nightly    2026-10-14 03:04:00 nightly catch-up finished" in out
     assert "ALERT      2026-10-14 03:04:00 the Reflector answered nothing" in out
     assert "hooks      last 7 days: 1 session start runs, 0 lost the lock, 2 stop runs, 1 lost the lock" in out
-    runs, held = m.hook_health(m.ROOT / "hook.log")
-    assert runs == {"stop": 2, "session start": 1} and held == {"stop": 1}
-    assert m.hook_health(m.ROOT / "no-such.log") == ({}, {})
+    assert "the hooks made 3 Reflector calls in those 7 days, $0.02" in out
+    runs, held, spent = m.hook_health(m.ROOT / "hook.log")
+    assert runs == {"stop": 2, "session start": 1} and held == {"stop": 1} and spent == [3, 0.02]
+    assert m.hook_health(m.ROOT / "no-such.log") == ({}, {}, [0, 0.0])
     m.LOCK.rmdir()
+
+
+def test_a_run_logs_how_many_calls_it_made_and_what_the_cli_said_they_cost(m, tmp_path, monkeypatch, capsys):
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    answer = '{"is_error":false,"subtype":"success","total_cost_usd":0.0123,"result":"[]"}'
+    (fake / "claude").write_text(f"#!/bin/sh\ncat >/dev/null\nprintf '%s' '{answer}'\n")
+    (fake / "claude").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    m = load(tmp_path / "r", monkeypatch, MEMORY_LLM="cli")
+    assert m.spent() == ""                                                      # no calls, nothing to say
+    p = tmp_path / "t.jsonl"
+    transcript(p, [("user", "set maxconn"), ("assistant", "done")])
+    sys.argv = ["memory", "ingest", "--transcript", str(p), "--project", "p"]       # one file: `learn --transcripts-from` reads them all
+    m.main()
+    assert "1 Reflector calls, $0.012" in capsys.readouterr().err
 
