@@ -24,6 +24,8 @@ before editing either.
   journal file's modification time, an export's update time. A source dated ahead of the clock counts as now.
 - A Stop hook asks the Reflector with no lock held (`reflect_ahead`, `ask_checks`); it takes the
   lock only to store the answers, and a `.reflecting/` claim keeps two hooks off one transcript.
+  A check is owed (`recheck:` row) from `plan_checks` until `settle_checks`, so a hook that dies or
+  times out between its two locks loses none.
 - `compiled/*.md` are written to a `.tmp` sibling and `os.replace`d.
 - `cmd_hook` returns without side effects when `MEMORY_REFLECT` is set.
 - Six concurrent `hook` processes journaling the same lesson produce a vote count of exactly
@@ -43,8 +45,9 @@ before editing either.
   server keeps running.
 - A lock holder touches `.lock` every 60 s, and only a lock untouched for 600 s is broken as a
   crashed holder's, so a `learn` of any length keeps its lock. Breaking one happens under
-  `.lock.break`, so two writers cannot both break it; a holder touches and removes only a lock
-  whose `owner` token is still its own.
+  `.lock.break`, so two writers cannot both break it (a `.lock.break` a minute old was left by a
+  writer that died, and is removed); a holder touches and removes only a lock whose `owner` token
+  is still its own.
 - Coverage is 100 per cent of lines and branches over `bin/memory`, `tools/check_docs.py` and
   `tools/eval_recall.py`, with nothing excluded in `.coveragerc`.
 

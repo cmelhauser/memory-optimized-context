@@ -68,6 +68,7 @@ def log(*a):
 # ---------------------------------------------------------------- lock (single writer)
 LOCK_WAIT = 20    # seconds a writer waits for the lock; the SessionStart hook passes `ingest --wait 2`
 LOCK_BEAT = 60    # a holder touches the lock this often, so only a crashed holder's lock goes 600 s untouched
+BREAK_STALE = 60  # a `.lock.break` older than this was left by a writer that died while breaking a lock
 LOCK_STALE = 600  # a lock untouched for this long belonged to a process that died without releasing it
 
 class LockBusy(SystemExit):
@@ -101,7 +102,13 @@ class Lock:
         """Remove a lock nobody has touched for LOCK_STALE, under `.lock.break` so only one writer can do it. The
         staleness is checked again while holding that, because the lock seen a moment ago may be a live one by now."""
         try: BREAK.mkdir()
-        except (FileExistsError, FileNotFoundError): return
+        except FileNotFoundError: return
+        except FileExistsError:
+            # A break takes a moment. One that has stood for BREAK_STALE was left by a writer that died inside it, and
+            # would otherwise stop every later writer from ever breaking the lock it was breaking.
+            with suppress(OSError):
+                if time.time() - BREAK.stat().st_mtime > BREAK_STALE: BREAK.rmdir()
+            return
         try:
             if time.time() - LOCK.stat().st_mtime > LOCK_STALE:
                 log(f"breaking a lock left by {self.owner() or 'a crashed writer'}")
@@ -116,7 +123,7 @@ class Lock:
             try: stale = time.time() - LOCK.stat().st_mtime > LOCK_STALE
             except FileNotFoundError: continue   # released between our mkdir and our stat: take it on the next turn
             if stale: self.crashed_holders_lock()
-            else: time.sleep(0.1)
+            time.sleep(0.1)                       # whether or not it broke the lock: never spin
         raise LockBusy(f"memory: the lock was held for all of {self.wait:g} s (a long `learn`?); try again when it ends")
     def beat(self):
         """Keep the lock fresh for as long as it is held; a `learn` can hold it for hours. A lock that is no longer
@@ -444,13 +451,18 @@ def reconcile_many(c, ids):
     return settle_checks(c, settled, groups, ask_checks(groups))
 
 def plan_checks(c, ids):
-    """The lessons with no neighbour, settled already, and the rest in groups of CHECK_GROUP with their candidates."""
+    """The lessons with no neighbour, settled already, and the rest in groups of CHECK_GROUP with their candidates.
+    Each of those is owed its check from here until `settle_checks` clears it: a hook commits between the two, and a
+    lock wait that times out or a process that dies there would otherwise lose the check for good."""
     settled, asked = [], []
     for i in ids:
         HANDLED.add(i)
         r = c.execute("SELECT * FROM lessons WHERE id=?", (i,)).fetchone()
         cands = [x for x in search(c, r["text"], r["project"], k=6) if x["id"] != i]
-        if cands: asked.append((r, cands))
+        if cands:
+            asked.append((r, cands))
+            if c.execute("SELECT 1 FROM sources WHERE key=?", (RECHECK + i,)).fetchone() is None:
+                set_cursor(c, RECHECK + i, "owed")   # until settled, so a hook that dies or times out between locks owes it
         else: settled.append(i)
     return settled, [asked[n:n + CHECK_GROUP] for n in range(0, len(asked), CHECK_GROUP)]
 
@@ -493,7 +505,9 @@ def apply_verdict(c, r, cands, out):
     if not isinstance(out, dict): out = {}
     for sid in out.get("same", []):
         if any(x["id"] == sid for x in cands):  # merge: fold votes into the older, retire the new
-            c.execute("UPDATE lessons SET votes=votes+?, last_seen=? WHERE id=?", (r["votes"], NOW(), sid))
+            # The votes now, not as of the snapshot: a hook may have added one since this was planned.
+            c.execute("UPDATE lessons SET votes=votes+(SELECT votes FROM lessons WHERE id=?), last_seen=? WHERE id=?",
+                      (r["id"], NOW(), sid))
             c.execute("UPDATE lessons SET state='merged', superseded_by=? WHERE id=?", (sid, r["id"]))
             return
     for cid in out.get("contradicts", []):

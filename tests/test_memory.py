@@ -2520,3 +2520,54 @@ def test_install_nightly_prints_a_cron_line_off_macos(tmp_path):
 def test_install_nightly_refuses_what_it_cannot_schedule(tmp_path, args):
     r = install_nightly(fake_tools(tmp_path, "Darwin"), *args)
     assert r.returncode == 2 and r.stderr
+
+
+# ------------------------------------------------------------------ the gaps between a hook's two locks
+
+
+def test_a_check_planned_but_not_yet_settled_is_owed(m):
+    """A Stop hook commits its lessons, asks the checks with no lock held, and takes the lock again to settle them.
+    If that second wait times out, or the process dies, the lessons are already stored and a later run never meets them
+    as new; the check had to be owed from the moment it was planned."""
+    with m.db() as c:
+        old, _ = m.upsert(c, "node", "maxconn=4000 during the migration")
+        new, _ = m.upsert(c, "node", "maxconn=1024 post-migration")
+        alone, _ = m.upsert(c, "elsewhere", "a lesson with no neighbours")
+        m.set_cursor(c, m.RECHECK + new, "owed")
+        c.execute("UPDATE sources SET seen='2026-01-01T00:00:00+00:00' WHERE key=?", (m.RECHECK + new,))
+        settled, groups = m.plan_checks(c, [new, alone])
+        c.commit()
+    assert settled == [alone] and len(groups) == 1
+    with m.db() as c:
+        owed = dict(c.execute("SELECT key, seen FROM sources WHERE key LIKE 'recheck:%'").fetchall())
+        assert set(owed) == {m.RECHECK + new}                                # the lesson with no neighbour is owed nothing
+        assert owed[m.RECHECK + new] == "2026-01-01T00:00:00+00:00"          # and an older debt keeps its place in the queue
+        m.settle_checks(c, settled, groups, [json.dumps({new: {"same": [], "contradicts": [old]}})])
+        assert c.execute("SELECT count(*) FROM sources WHERE key LIKE 'recheck:%'").fetchone()[0] == 0
+
+
+def test_a_merge_takes_the_votes_the_lesson_has_by_then(m):
+    """Another hook can journal the same lesson while the first is asking its check; the vote it adds belongs to the
+    survivor too."""
+    with m.db() as c:
+        survivor, _ = m.upsert(c, "p", "pin image tags")
+        new, _ = m.upsert(c, "p", "always pin every image tag")
+        settled, groups = m.plan_checks(c, [new])
+        m.upsert(c, "p", "always pin every image tag")                       # a second hook's vote, after the plan
+        m.settle_checks(c, settled, groups, [json.dumps({new: {"same": [survivor], "contradicts": []}})])
+        assert c.execute("SELECT votes FROM lessons WHERE id=?", (survivor,)).fetchone()[0] == 3
+        assert c.execute("SELECT state FROM lessons WHERE id=?", (new,)).fetchone()[0] == "merged"
+
+
+def test_a_break_lock_a_dead_writer_left_does_not_stop_every_writer_for_good(m):
+    """A writer killed between taking `.lock.break` and removing it left every later writer unable to break a stale
+    lock, and each gave up in milliseconds, because nothing slept while it waited."""
+    m.ROOT.mkdir(parents=True, exist_ok=True)
+    m.LOCK.mkdir()
+    os.utime(m.LOCK, (0, 0))                                                 # its holder died long ago
+    m.BREAK.mkdir()
+    os.utime(m.BREAK, (time.time() - 3600,) * 2)                             # and so did the one breaking it
+    started = time.time()
+    with m.Lock(wait=3) as lk:
+        assert lk.mine() and not m.BREAK.exists()
+    assert time.time() - started < 2

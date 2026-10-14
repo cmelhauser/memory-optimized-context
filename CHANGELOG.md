@@ -7,6 +7,18 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+### Fixed
+
+- An independent review of the hook's two-lock flow found three gaps, each now closed. A hook that died, or
+  whose second lock wait timed out, between storing its lessons and settling their contradiction checks
+  lost those checks for good, since a later `learn` meets the lessons as already stored: a check is now owed
+  from the moment it is planned. A merge folded in the votes the lesson had when planned, losing one a second
+  hook added meanwhile; it now takes them as they are. A writer that died while breaking a stale lock left
+  `.lock.break` behind, and every later writer failed within milliseconds, without sleeping; a `.lock.break`
+  a minute old is now removed, and a waiting writer sleeps between tries.
+  `test_a_check_planned_but_not_yet_settled_is_owed`, `test_a_merge_takes_the_votes_the_lesson_has_by_then`,
+  `test_a_break_lock_a_dead_writer_left_does_not_stop_every_writer_for_good`.
+
 ### Added
 
 - `examples/global-CLAUDE.md` tells Claude to call the `memory` server's `feedback` tool on a recalled lesson
