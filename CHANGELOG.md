@@ -7,6 +7,8 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-14
+
 ### Fixed
 
 - A fresh review of the 0.2.2 fixes found four small gaps. A new lesson from an old source that lost one
