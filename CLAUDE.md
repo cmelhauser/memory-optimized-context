@@ -21,7 +21,9 @@ before editing either.
 - A journal file is created with `open(path, "x")` and is never opened for writing again.
 - Every write to `compiled/` or the database happens inside `with Lock():`.
 - A lesson's `first_seen` and `last_seen` are when its source was written (`seen_at`): a transcript's or
-  journal file's modification time, an export's update time. A source dated ahead of the clock counts as now.
+  journal file's modification time, an export's update time, always written in UTC. A source dated ahead of the
+  clock counts as now. A merge keeps the survivor's newest `last_seen`, and of two lessons that contradict, the
+  one from the newer source wins, whichever was read last.
 - A Stop hook asks the Reflector with no lock held (`reflect_ahead`, `ask_checks`); it takes the
   lock only to store the answers, and a `.reflecting/` claim keeps two hooks off one transcript.
   A check is owed (`recheck:` row) from `plan_checks` until `settle_checks`, so a hook that dies or

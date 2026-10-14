@@ -185,13 +185,14 @@ def lid(project, text):
 SEEN = {"at": None}   # when what is being read was written; None is now, as for a Stop hook's turn
 
 def stamp(when):
-    """An epoch number or ISO text as UTC ISO seconds, as NOW() writes them, never later than now; None if it is neither."""
+    """An epoch number or ISO text as UTC ISO seconds, as NOW() writes them, never later than now; None if it is neither.
+    Always in UTC: upsert compares these as text, which orders them only if they all carry the same offset."""
     if isinstance(when, (int, float)) and not isinstance(when, bool):
         try: t = datetime.fromtimestamp(when, timezone.utc)
         except (OverflowError, OSError, ValueError): return None
     else:
         t = instant(when) if when else None
-    return None if t is None else min(t, datetime.now(timezone.utc)).isoformat(timespec="seconds")
+    return None if t is None else min(t, datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(timespec="seconds")
 
 @contextmanager
 def seen_at(when):
@@ -540,14 +541,20 @@ def apply_verdict(c, r, cands, out):
     if not isinstance(out, dict): out = {}
     for sid in out.get("same", []):
         if any(x["id"] == sid for x in cands):  # merge: fold votes into the older, retire the new
-            # The votes now, not as of the snapshot: a hook may have added one since this was planned.
-            c.execute("UPDATE lessons SET votes=votes+(SELECT votes FROM lessons WHERE id=?), last_seen=? WHERE id=?",
-                      (r["id"], NOW(), sid))
+            # The votes now, not as of the snapshot: a hook may have added one since this was planned. And the times of
+            # its source, not today's: folding an old duplicate in must not make the survivor look new.
+            c.execute("UPDATE lessons SET votes=votes+(SELECT votes FROM lessons WHERE id=?), "
+                      "last_seen=MAX(last_seen,(SELECT last_seen FROM lessons WHERE id=?)), "
+                      "first_seen=MIN(first_seen,(SELECT first_seen FROM lessons WHERE id=?)) WHERE id=?",
+                      (r["id"], r["id"], r["id"], sid))
             c.execute("UPDATE lessons SET state='merged', superseded_by=? WHERE id=?", (sid, r["id"]))
             return
     for cid in out.get("contradicts", []):
         if any(x["id"] == cid for x in cands):
-            c.execute("UPDATE lessons SET state='superseded', superseded_by=? WHERE id=?", (r["id"], cid))
+            # The newer source wins. "New" means newly read, and a backfill reads old transcripts after new ones.
+            last = dict(c.execute("SELECT id, last_seen FROM lessons WHERE id IN (?, ?)", (r["id"], cid)).fetchall())
+            old, new = (r["id"], cid) if last[cid] > last[r["id"]] else (cid, r["id"])
+            c.execute("UPDATE lessons SET state='superseded', superseded_by=? WHERE id=?", (new, old))
 
 def owe_check(c, lesson_id):
     set_cursor(c, RECHECK + lesson_id, "owed")

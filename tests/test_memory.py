@@ -2698,3 +2698,41 @@ def test_a_lesson_an_answer_repeats_is_one_vote(m, monkeypatch):
     monkeypatch.setattr(m, "llm", fake_llm([item, {**item, "text": "Pin  image\ntags"}, {"project": "q", "text": "pin image tags"}], {}))
     assert m.reflect("some text", "proj", set()) == [("p", "Pin image tags"), ("q", "pin image tags")]
 
+
+# ------------------------------------------------------------------ the order of source times
+
+
+def test_stamp_is_always_utc_so_that_text_order_is_time_order(m):
+    assert m.stamp("2020-01-01T10:00:00+14:00") == "2019-12-31T20:00:00+00:00"
+    with m.db() as c:
+        with m.seen_at("2020-01-01T00:00:00+00:00"): m.upsert(c, "p", "a fact")
+        with m.seen_at("2020-01-01T10:00:00+14:00"): m.upsert(c, "p", "a fact")     # really 2019-12-31T20:00Z, earlier
+    assert seen_of(m, "a fact") == ("2019-12-31", "2020-01-01", 2)
+
+
+def lesson_from(m, c, when, text, project="p"):
+    with m.seen_at(when): return m.upsert(c, project, text)[0]
+
+
+def test_folding_an_old_duplicate_in_does_not_make_the_survivor_look_new(m):
+    with m.db() as c:
+        survivor = lesson_from(m, c, "2025-01-01T00:00:00Z", "pin image tags")
+        old = lesson_from(m, c, "2024-03-01T00:00:00Z", "always pin every image tag")
+        rows = {i: c.execute("SELECT * FROM lessons WHERE id=?", (i,)).fetchone() for i in (old, survivor)}
+        m.settle_checks(c, [], [[(rows[old], [rows[survivor]])]], [json.dumps({old: {"same": [survivor], "contradicts": []}})])
+        row = c.execute("SELECT first_seen, last_seen, votes FROM lessons WHERE id=?", (survivor,)).fetchone()
+    assert (row["first_seen"][:10], row["last_seen"][:10], row["votes"]) == ("2024-03-01", "2025-01-01", 2)
+
+
+def test_the_newer_source_wins_a_contradiction_whichever_was_read_last(m):
+    """A backfill reads old transcripts after new ones; the lesson read later is not for that reason the newer."""
+    with m.db() as c:
+        newer = lesson_from(m, c, "2025-06-01T00:00:00Z", "Always use tabs")
+        older = lesson_from(m, c, "2024-01-01T00:00:00Z", "Never use tabs")
+        row = c.execute("SELECT * FROM lessons WHERE id=?", (older,)).fetchone()
+        m.settle_checks(c, [], [[(row, [c.execute("SELECT * FROM lessons WHERE id=?", (newer,)).fetchone()])]],
+                        [json.dumps({older: {"same": [], "contradicts": [newer]}})])
+        states = dict(c.execute("SELECT id, state FROM lessons").fetchall())
+        assert states == {newer: "active", older: "superseded"}
+        assert c.execute("SELECT superseded_by FROM lessons WHERE id=?", (older,)).fetchone()[0] == newer
+

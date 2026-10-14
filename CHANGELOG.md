@@ -9,6 +9,14 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A review of the source-time change found three gaps. `stamp` kept the offset of the time it was given, and
+  `upsert` compares those times as text, which orders them only if they share one offset: a lesson met again from a
+  source stamped `+14:00` could take the wrong `last_seen` or `first_seen`. They are always UTC now. Folding a
+  duplicate into a survivor set the survivor's `last_seen` to today, so a backfill that deduplicated made lessons
+  look new again; it keeps the newest of the two, and the oldest `first_seen`. A contradiction always superseded the
+  other lesson, on the assumption that the one read last is the newer, which a backfill breaks: it reads old
+  transcripts after new ones, so an old "never use tabs" could retire a current "always use tabs". The newer source
+  now wins. `test_the_newer_source_wins_a_contradiction_whichever_was_read_last`.
 - A review of the Reflector's path from answer to store found five gaps. A lesson was stored as the model wrote
   it, so a newline in it (from a transcript that told the model what to write) became a heading or an `@` line
   of its own in `compiled/PLAYBOOK.md`, which every session imports, and a lesson could be any length: a lesson
