@@ -7,6 +7,12 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+### Added
+
+- `tools/install_nightly.sh` and `tools/nightly_catchup.sh`: a nightly `learn --transcripts` that reads the
+  tails a Stop hook missed, with a retry while a hook holds the lock and an alert file and notification when
+  the Reflector answers nothing. macOS gets a launchd agent; elsewhere the installer prints a cron line.
+
 ### Changed
 
 - CI runs less for the same assurance. A pull request now runs everything (lint, 3.10, 3.12 and 3.13,

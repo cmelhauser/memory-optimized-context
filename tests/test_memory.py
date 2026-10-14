@@ -33,7 +33,7 @@ SLOW_ONCE = (                       # a stand-in `claude` that is too slow the f
     "#!/bin/sh\n"
     "cat >/dev/null\n"
     "echo x >> __MARKS__\n"
-    "if [ $(wc -l < __MARKS__) -le 1 ]; then sleep 5; fi\n"
+    "if [ $(wc -l < __MARKS__) -le 1 ]; then sleep 8; fi\n"
     """printf '%s' '{"is_error":false,"subtype":"success","result":"[]"}'\n"""
 )
 
@@ -2033,7 +2033,7 @@ def test_a_timed_out_call_is_tried_once_more(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     m = load(tmp_path / "r", monkeypatch, MEMORY_LLM="cli")
-    monkeypatch.setattr(m, "CLI_TIMEOUT", 0.3)
+    monkeypatch.setattr(m, "CLI_TIMEOUT", 2)   # room for a busy machine to start the second attempt
     assert m.llm("a window that is slow the first time") == "[]"      # the second attempt answered
     assert marks.read_text().count("x") == 2
     assert "trying once more" in capsys.readouterr().err
@@ -2424,3 +2424,99 @@ def test_exported_chats_age_from_their_last_update(m, tmp_path, monkeypatch):
     assert seen_of(m, "lesson claude")[:2] == ("2026-03-01", "2026-03-01")
     assert seen_of(m, "lesson chatgpt")[:2] == ("2023-11-14", "2023-11-14")
     assert seen_of(m, "lesson gemini")[:2] == ("2026-03-02", "2026-03-02")
+
+
+# ------------------------------------------------------------------ the nightly catch-up
+
+
+def fake_memory(tmp_path, rc, lines=(), lock_held_first=False):
+    """A stand-in interpreter for tools/nightly_catchup.sh: it prints `lines` and exits `rc`, after saying the lock was
+    held on its first call if asked to."""
+    count = tmp_path / "calls"
+    fake = tmp_path / "fakepython"
+    held = f'if [ ! -e "{count}" ]; then echo x > "{count}"; echo "memory: the lock was held for all of 20 s"; exit 1; fi\n'
+    fake.write_text("#!/bin/sh\n" + (held if lock_held_first else "") + "".join(f"echo '{ln}'\n" for ln in lines) + f"exit {rc}\n")
+    fake.chmod(0o755)
+    return fake
+
+
+def run_nightly(tmp_path, fake, **extra):
+    state = tmp_path / "state"
+    env = {**os.environ, "HOME": str(tmp_path), "MEMORY_PYTHON": str(fake), "MEMORY_STATE_DIR": str(state), "RETRY_WAIT": "0", **extra}
+    r = subprocess.run(["bash", str(REPO / "tools" / "nightly_catchup.sh")], env=env, capture_output=True, text=True, timeout=30, check=False)
+    log = (state / "backfill.log").read_text()
+    return r.returncode, log, state / "needs-attention"
+
+
+def test_the_nightly_catch_up_clears_the_alert_when_everything_is_read(tmp_path):
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "needs-attention").write_text("old\n")
+    rc, log, alert = run_nightly(tmp_path, fake_memory(tmp_path, 0, ["[memory] learn: +3 new"]))
+    assert rc == 0 and "finished: everything read" in log and "+3 new" in log and not alert.exists()
+
+
+def test_the_nightly_catch_up_shouts_when_the_reflector_answers_nothing(tmp_path):
+    rc, log, alert = run_nightly(tmp_path, fake_memory(tmp_path, 2, ["[memory] the Reflector said: logged out"]))
+    assert rc == 2 and "STOPPED: the Reflector answered nothing" in log
+    assert "logged out" in alert.read_text() and "logged out" in log
+
+
+def test_the_nightly_catch_up_says_when_it_stopped_part_way(tmp_path):
+    rc, log, alert = run_nightly(tmp_path, fake_memory(tmp_path, 1, ["[memory] stopped early: budget"]))
+    assert rc == 1 and "stopped part-way (exit 1); tomorrow carries on" in log and not alert.exists()
+
+
+def test_the_nightly_catch_up_tries_again_while_a_hook_holds_the_lock(tmp_path):
+    rc, log, _ = run_nightly(tmp_path, fake_memory(tmp_path, 0, ["[memory] learn: +1 new"], lock_held_first=True))
+    assert rc == 0 and log.count("lock was held") == 1 and "+1 new" in log
+
+
+def test_the_nightly_catch_up_notifies_when_it_can(tmp_path):
+    """The script looks in $HOME/.local/bin before anywhere else, so the stand-in is found even where a real
+    osascript exists."""
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "osascript").write_text(f'#!/bin/sh\necho "$@" >> {tmp_path / "notified"}\n')
+    (bin_dir / "osascript").chmod(0o755)
+    rc, _, _ = run_nightly(tmp_path, fake_memory(tmp_path, 2, ["[memory] no"]))
+    assert rc == 2 and "display notification" in (tmp_path / "notified").read_text()
+
+
+def fake_tools(tmp_path, system):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    for name, body in (("uname", f"echo {system}"), ("launchctl", f'echo "$@" >> {tmp_path / "launchctl.log"}')):
+        (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
+        (bin_dir / name).chmod(0o755)
+    return {**os.environ, "HOME": str(tmp_path), "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+
+
+def install_nightly(env, *args):
+    return subprocess.run(["bash", str(REPO / "tools" / "install_nightly.sh"), *args], env=env, capture_output=True, text=True, timeout=30, check=False)
+
+
+def test_install_nightly_writes_a_launchd_agent_from_this_checkouts_location(tmp_path):
+    env = fake_tools(tmp_path, "Darwin")
+    dry = install_nightly(env, "--dry-run", "--hour", "04", "--calls", "25")
+    assert dry.returncode == 0 and f"{REPO}/tools/nightly_catchup.sh" in dry.stdout
+    assert "<integer>4</integer>" in dry.stdout and "<key>CALLS</key><string>25</string>" in dry.stdout
+    assert not (tmp_path / "Library").exists()                                         # a dry run changes nothing
+    done = install_nightly(env)
+    plist = tmp_path / "Library" / "LaunchAgents" / "local.memory-optimized-context.nightly-catchup.plist"
+    assert done.returncode == 0 and "<integer>3</integer>" in plist.read_text() and "bootstrap" in (tmp_path / "launchctl.log").read_text()
+    gone = install_nightly(env, "--uninstall", "--dry-run")
+    assert gone.returncode == 0 and plist.exists() and "would unload and remove" in gone.stdout
+    assert install_nightly(env, "--uninstall").returncode == 0 and not plist.exists()
+    assert "bootout" in (tmp_path / "launchctl.log").read_text()
+
+
+def test_install_nightly_prints_a_cron_line_off_macos(tmp_path):
+    r = install_nightly(fake_tools(tmp_path, "Linux"), "--hour", "2")
+    assert r.returncode == 0 and f"0 2 * * * CALLS=60 /bin/bash '{REPO}/tools/nightly_catchup.sh'" in r.stdout
+    assert not (tmp_path / "Library").exists()
+
+
+@pytest.mark.parametrize("args", [["--hour", "24"], ["--hour", "x"], ["--calls", "0"], ["--calls", ""], ["--bogus"]])
+def test_install_nightly_refuses_what_it_cannot_schedule(tmp_path, args):
+    r = install_nightly(fake_tools(tmp_path, "Darwin"), *args)
+    assert r.returncode == 2 and r.stderr

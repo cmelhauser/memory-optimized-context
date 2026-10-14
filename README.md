@@ -15,7 +15,7 @@ reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.2.0`. 140 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.2.0`. 152 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. It has run natively against a real store
@@ -286,6 +286,25 @@ time. To see whether hooks are losing the lock, count the lines saying "the lock
 date: a Stop hook waits up to 120 s for it and the SessionStart hook 2 s, so a few SessionStart
 lines during a long `learn` are expected and a Stop hook's are not.
 
+### A nightly catch-up
+
+A Stop hook that cannot get the lock leaves its transcript for later, and a session whose last stops
+lost the race has its final turns read by nothing else. `tools/install_nightly.sh` schedules
+`tools/nightly_catchup.sh`, which runs `learn --transcripts --max-calls 60` each night:
+
+```
+tools/install_nightly.sh [--hour 3] [--calls 60]   # macOS: a launchd agent; elsewhere it prints a cron line
+tools/install_nightly.sh --dry-run                 # show what it would write
+tools/install_nightly.sh --uninstall
+```
+
+The agent's file is written from this checkout's location when you run it. The run logs to
+`~/.local/share/memory-optimized-context/backfill.log` and tries again while a hook holds the lock. Its
+exit status is `learn`'s: 0 when everything was read, 1 when a budget or a usage limit stopped it
+part-way (the next night carries on), 2 when the Reflector answered nothing, which also writes
+`needs-attention` beside the log and posts a macOS notification. An expired login or a spent limit is the
+usual cause; `echo 'Say OK' | claude -p --output-format json --no-session-persistence` shows which.
+
 ## Environment
 
 | Var | Default | Notes |
@@ -319,8 +338,8 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       140 tests, six-process concurrency test included
-tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, check_docs.py, eval_recall.py
+tests/test_memory.py       152 tests, six-process concurrency test included
+tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, install_nightly.sh, nightly_catchup.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
 docs/research.md           what was checked before deciding, and what each finding changed
