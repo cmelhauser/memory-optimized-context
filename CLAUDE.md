@@ -41,6 +41,9 @@ before editing either.
   `repo_of()`, and otherwise under its tool.
 - The Reflector's `claude -p` gets `--tools ""`, `--strict-mcp-config`, no extended thinking, and its
   instructions through `--system-prompt`; only the conversation goes to stdin.
+- A lesson is stored as one printable line of at most 500 characters (`clean_lesson`, applied in `upsert`),
+  under a slug of at most 64 characters, with nothing that cannot be encoded: it is model-written text that
+  every session imports from `compiled/`, so a newline in it must not forge a heading or an `@` line.
 - A writer that cannot get the lock raises `LockBusy`; the MCP tools answer "busy" and the
   server keeps running.
 - A lock holder touches `.lock` every 60 s, and only a lock untouched for 600 s is broken as a
@@ -70,7 +73,7 @@ before editing either.
 - During a long `learn` the SessionStart hook gives up on the lock after 2 s, so `compiled/` can
   be one compile behind when a session starts.
 - A Reflector answer with no JSON array in it counts as "no lessons", not as a failure, so one
-  odd answer cannot stall a backfill.
+  odd answer cannot stall a backfill. An answer cut short keeps the complete lessons at its head.
 - An exported chat is filed under its tool (`claude-ai`, `chatgpt`, `gemini`), not under a
   project named after its title, unless the Reflector recognises one of the known projects in it.
 - A JSON file in `exports/` that is none of the three exports, such as the manifest that comes

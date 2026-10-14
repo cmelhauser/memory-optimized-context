@@ -9,6 +9,17 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A review of the Reflector's path from answer to store found five gaps. A lesson was stored as the model wrote
+  it, so a newline in it (from a transcript that told the model what to write) became a heading or an `@` line
+  of its own in `compiled/PLAYBOOK.md`, which every session imports, and a lesson could be any length: a lesson
+  is now one printable line of at most 500 characters. A slug of any length was accepted, and one past the
+  operating system's file-name limit made every later run fail in `compile_`: a slug is now at most 64
+  characters. A lone surrogate, which a JSON escape in a transcript or an answer decodes to, made the call or the
+  database write raise and stalled that source for good: text is scrubbed before it is sent or stored, and a
+  transcript line with an invalid byte is skipped. An answer cut short returned its first inner object as if it
+  were the answer, losing every lesson: it now keeps the complete lessons at its head, and a cut-short contradiction
+  verdict counts as no verdict. A lesson an answer repeated got a vote for each repeat: it gets one.
+  `test_a_lesson_is_one_printable_line_that_cannot_forge_lines_in_compiled`.
 - A turn longer than a window is cut into pieces that used to share one cursor, the start of the turn. A
   Reflector failure part-way through it left the cursor there, so the next run sent the pieces already answered
   again and each of their lessons got a second vote. The cursor now moves piece by piece (`N+K`), a failure

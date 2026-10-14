@@ -51,8 +51,22 @@ CFG = {
 }
 def NOW():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-LESSON_RE = re.compile(r"^\[([a-z0-9][a-z0-9._-]*)\]\s+(.+?)\s*$", re.I)
-PROJECT_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")   # a slug is a name: `compile_` makes it a filename, so never a path
+SLUG = r"[a-z0-9][a-z0-9._-]{0,63}"                # at most 64: `compile_` makes it a filename, and the OS refuses a long one
+LESSON_RE = re.compile(rf"^\[({SLUG})\]\s+(.+?)\s*$", re.I)
+PROJECT_RE = re.compile(SLUG)                      # a slug is a name, so never a path
+LESSON_MAX = 500                                   # characters: a lesson is a sentence, and it is imported into every session
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+def scrub(text):
+    """Text that can be encoded: a lone surrogate, which a JSON escape in a transcript or in a model's answer can
+    carry, would raise at the subprocess, at the database, or in a file write, and stall the source for good."""
+    return str(text).encode("utf-8", "replace").decode("utf-8")
+
+def clean_lesson(text):
+    """A lesson as one printable line of at most LESSON_MAX characters. A model wrote it from text that reached it, so
+    a newline in it must not become a heading or an `@` import line of its own in the file every session reads."""
+    s = " ".join(CONTROL.sub(" ", scrub(text)).split())
+    return s if len(s) <= LESSON_MAX else s[:LESSON_MAX - 1].rstrip() + "…"
 
 def as_project(value, default):
     """A slug the store and the filesystem both accept, or `default`. The Reflector chooses the slug from text that
@@ -190,7 +204,7 @@ def seen_at(when):
 
 def upsert(c, project, text):
     """ADD-only. Exact duplicate → +1 vote. Returns (id, is_new). Its time is the source's, inside `seen_at`."""
-    project = project.lower(); text = text.strip()
+    project = project.lower(); text = clean_lesson(text)
     i = lid(project, text); seen = SEEN["at"] or NOW()
     row = c.execute("SELECT id FROM lessons WHERE id=?", (i,)).fetchone()
     if row:
@@ -240,6 +254,7 @@ def llm(prompt, system="You are a precise assistant. Output only what is asked."
     subscription). A failure is logged and returned as None, never raised; reflect() turns it into ReflectorFailed."""
     mode = CFG["llm"]
     if mode == "none": return None
+    prompt = scrub(prompt)
     if mode in ("auto", "sdk") and os.environ.get("ANTHROPIC_API_KEY"):
         try:
             import anthropic
@@ -285,8 +300,25 @@ def parse_json(text):
     dec = json.JSONDecoder()
     for m in re.finditer(r"[\[{]", text):
         try: return dec.raw_decode(text, m.start())[0]
-        except json.JSONDecodeError: continue
+        except json.JSONDecodeError:
+            if JSON_OPENING.match(text, m.start()): return None   # an answer cut short: its first inner object is not it
     return None
+
+SEPARATORS = re.compile(r"[ \t\r\n,]*")
+JSON_OPENING = re.compile(r"\[\s*[\[{\"\]]|\{\s*[\"}]")   # where JSON, rather than prose, begins
+
+def cut_short_items(text):
+    """The complete objects at the head of an array that was cut short or went wrong part-way: the lessons an answer
+    held before it stopped, kept, not lost with the rest."""
+    m = re.search(r"\[\s*\{", text)
+    items, dec = [], json.JSONDecoder()
+    pos = m.end() - 1 if m else len(text)
+    while pos < len(text):
+        try: item, pos = dec.raw_decode(text, pos)
+        except json.JSONDecodeError: break
+        items.append(item)
+        pos = SEPARATORS.match(text, pos).end()
+    return items
 
 
 # ---------------------------------------------------------------- embeddings (optional)
@@ -416,9 +448,12 @@ def reflect(text, default_project, known_projects):
         why, REFLECTOR["why"] = REFLECTOR["why"] or "the log line above says why", ""   # never report a stale reason
         raise ReflectorFailed(f"the Reflector gave no answer: {why}")
     spend(); BUDGET["answered"] += 1
-    items = parse_json(out) or []
-    return [(as_project(i.get("project") or default_project, default_project), str(i["text"]))
-            for i in items if isinstance(i, dict) and i.get("text")]
+    items = parse_json(out)
+    if items is None: items = cut_short_items(out)
+    if isinstance(items, dict): items = [items]                # one lesson, not in an array
+    found = ((as_project(i.get("project") or default_project, default_project), clean_lesson(i["text"]))
+             for i in items if isinstance(i, dict) and i.get("text"))
+    return list({(p, norm(t)): (p, t) for p, t in found if t}.values())   # one vote per lesson an answer repeats
 
 def known_projects(c):
     return {r[0] for r in c.execute("SELECT DISTINCT project FROM lessons")}
@@ -576,7 +611,7 @@ def line_turn(raw):
     """One transcript line → "USER: text" or "ASSISTANT: text"; None for anything else. Claude Code marks a turn with
     `type`, Cursor with `role`."""
     try: j = json.loads(raw)
-    except json.JSONDecodeError: return None
+    except ValueError: return None        # not JSON, or a byte that is not UTF-8 (a UnicodeDecodeError)
     kind = (j.get("type") or j.get("role")) if isinstance(j, dict) else None
     if kind not in ("user", "assistant"): return None
     msg = j.get("message")

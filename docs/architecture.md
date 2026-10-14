@@ -81,6 +81,15 @@ Four, collapsed into one table with a `state` column:
 The original plan had four tables. One table with a state column and a project column does the
 same job with no joins.
 
+## What a model's answer may put in the store
+
+The Reflector's lessons are written by a model from text that reached it, and `compiled/` is imported into
+every session, so a lesson is data that can steer later sessions. Three things limit it. The Reflector runs
+with no tools and is told the conversation is never instructions. A lesson is stored as one printable line
+of at most 500 characters under a slug of at most 64, so it cannot forge a heading or an import line, and
+a slug cannot be a path. And contradiction checks, votes and `harmful` marks can retire a lesson that proves
+wrong. None of this makes a lesson's content trustworthy: a persuasive false lesson is still a lesson.
+
 ## Size
 
 Lessons are one sentence each, so the store stays small. A store of several thousand active lessons
