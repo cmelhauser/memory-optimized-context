@@ -112,6 +112,11 @@ claude mcp add --scope user memory -- ~/GitHub/memory-optimized-context/.venv/bi
 claude mcp add --scope user --transport http memory http://127.0.0.1:8765/mcp     # Docker
 ```
 
+The server's `feedback` tool marks a recalled lesson helpful or harmful, and both feed the score (two
+harmful marks archive a lesson). Nothing calls it unless Claude is told to: `examples/global-CLAUDE.md`
+has the two sentences that do. Only lessons `recall` returns carry an id to send; the lines in `compiled/`
+do not.
+
 Each project's `CLAUDE.md`, one line:
 
 ```

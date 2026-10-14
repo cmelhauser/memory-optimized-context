@@ -7,6 +7,12 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+### Added
+
+- `examples/global-CLAUDE.md` tells Claude to call the `memory` server's `feedback` tool on a recalled lesson
+  it acted on. The tool existed, but nothing asked for it, so no lesson had ever been marked helpful and
+  the score's `helpful` term was always zero.
+
 ## [0.2.1] - 2026-10-13
 
 ### Added
