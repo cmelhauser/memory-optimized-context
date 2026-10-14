@@ -9,6 +9,12 @@ until the system has run against a real store for at least a month.
 
 ### Fixed
 
+- A turn longer than a window is cut into pieces that used to share one cursor, the start of the turn. A
+  Reflector failure part-way through it left the cursor there, so the next run sent the pieces already answered
+  again and each of their lessons got a second vote. The cursor now moves piece by piece (`N+K`), a failure
+  resumes at the next piece, and a Stop hook may stop inside a long turn, which made `hook_windows` unnecessary.
+  A cursor that names more pieces than the turn now has, because the window size changed, reads the turn whole.
+  `test_a_failure_inside_a_long_turn_resumes_at_the_next_piece`. Gemini activity, cut the same way, is unchanged.
 - An independent review of the hook's two-lock flow found three gaps, each now closed. A hook that died, or
   whose second lock wait timed out, between storing its lessons and settling their contradiction checks
   lost those checks for good, since a later `learn` meets the lessons as already stored: a check is now owed

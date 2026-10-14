@@ -618,42 +618,49 @@ def claude_code_turns(path, start=0):
     turns, end = transcript_turns(path, start)
     return "\n\n".join(t for t, _ in turns), end
 
-def turn_windows(turns, start, size):
+def split_cursor(raw):
+    """A transcript's cursor as (byte offset, pieces of the long turn at that offset already reflected). `N` is a
+    plain offset; `N+K` says the turn that starts at N was cut into pieces and the first K are done."""
+    offset, _, done = str(raw or 0).partition("+")
+    return int(offset), int(done or 0)
+
+def turn_windows(turns, start, size, skip=0, piece=None):
     """Group (turn text, offset past it) into [(window text, offset to resume from once it is reflected)], each window
-    at most `size` chars. A turn longer than a window is cut, and only its last piece moves the offset past it."""
+    at most `size` chars. A turn longer than a window is cut, and only its last piece moves the offset past it, unless
+    `piece` says how to write a cursor inside the turn: `piece(offset, k)` for the one after k pieces. The first
+    `skip` pieces of a first turn that long are not returned: they were reflected before a failure, and sending them
+    again would give each lesson in them a second vote."""
     out, buf, done = [], "", start
-    for text, end in turns:
+    for n, (text, end) in enumerate(turns):
         if buf and len(buf) + 2 + len(text) > size:
             out.append((buf, done)); buf = ""
         if len(text) > size:
             pieces = [text[i:i + size] for i in range(0, len(text), size)]
-            out += [(p, done) for p in pieces[:-1]] + [(pieces[-1], end)]
+            first = skip if n == 0 and 0 < skip < len(pieces) else 0     # a smaller window than before: read it all
+            out += [(p, piece(done, k) if piece else done) for k, p in enumerate(pieces[:-1], 1) if k > first]
+            out.append((pieces[-1], end))
         else:
             buf = f"{buf}\n\n{text}" if buf else text
         done = end
     return out + ([(buf, done)] if buf else [])
 
-HOOK_WINDOWS = 2   # a Stop hook reflects at most this many windows, oldest first; the rest waits for the next stop
+HOOK_WINDOWS = 2   # a Stop hook reflects at most this many windows, oldest first; the rest waits for the next stop. It may
+                   # stop inside a long turn: the cursor says how many of its pieces are done (`offset+k`)
 
-def hook_windows(windows, start):
-    """How many windows a hook reads: HOOK_WINDOWS, or more if the last of them ends inside a turn cut across
-    windows. Stopping there would never move the cursor, and would send the turn's pieces again."""
-    n = HOOK_WINDOWS
-    while n < len(windows) and windows[n - 1][1] == (windows[n - 2][1] if n > 1 else start):
-        n += 1
-    return n
+def inside_turn(offset, k):
+    return f"{offset}+{k}"
 
 def ingest_transcript(c, path, project, backfill=False):
     """Reflect a transcript from its cursor, window by window, moving the cursor after each, so a ReflectorFailed
     part-way costs none of the windows already reflected. A backfill reads every window. A Stop hook reads at most
     HOOK_WINDOWS, oldest first: a stop follows every turn, so that is usually one call, and a session whose earlier
     stops could not get the lock is caught up by its next stops or a backfill, never skipped. A turn cut across
-    windows is read to its last piece, the only one that moves the cursor past it."""
+    windows moves the cursor piece by piece (`offset+k`), so a failure inside it costs none of the pieces answered."""
     key = f"transcript:{path}"
-    start = int(cursor(c, key) or 0)
+    start, skip = split_cursor(cursor(c, key))
     turns, end = transcript_turns(path, start)
-    windows = turn_windows(turns, start, CFG["transcript_chars"])
-    n = len(windows) if backfill else hook_windows(windows, start)
+    windows = turn_windows(turns, start, CFG["transcript_chars"], skip, inside_turn)
+    n = len(windows) if backfill else HOOK_WINDOWS
     new = []
     with carrying(new), seen_at(Path(path).stat().st_mtime):
         for text, done in windows[:n]:
@@ -685,22 +692,23 @@ def reflect_ahead(path, project):
     up: about half of all stops in October 2026. A failure keeps the windows answered before it."""
     key = f"transcript:{path}"
     with db() as c:
-        start, known = int(cursor(c, key) or 0), known_projects(c)
+        was, known = str(cursor(c, key) or 0), known_projects(c)
+    start, skip = split_cursor(was)
     turns, end = transcript_turns(path, start)
-    windows = turn_windows(turns, start, CFG["transcript_chars"])
-    n = hook_windows(windows, start)
+    windows = turn_windows(turns, start, CFG["transcript_chars"], skip, inside_turn)
+    n = HOOK_WINDOWS
     read, why = [], None
     try:
         for text, done in windows[:n]:
             read.append((reflect(text, project, known), done))
     except ReflectorFailed as e:
         why = str(e)
-    return {"key": key, "start": start, "read": read, "end": end if not why and n >= len(windows) else None, "why": why}
+    return {"key": key, "start": was, "read": read, "end": end if not why and n >= len(windows) else None, "why": why}
 
 def commit_reflection(c, ahead):
     """Under the lock: keep what `reflect_ahead` read, unless the cursor moved meanwhile, in which case another
     reader, a `learn`, has those turns, and keeping them as well would count each lesson twice."""
-    if int(cursor(c, ahead["key"]) or 0) != ahead["start"]: return []
+    if str(cursor(c, ahead["key"]) or 0) != ahead["start"]: return []
     new = []
     for pairs, done in ahead["read"]:
         new += [upsert(c, p, t) for p, t in pairs]

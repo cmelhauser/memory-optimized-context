@@ -83,6 +83,8 @@ before editing either.
 - A Stop hook reads at most two windows of new transcript. A session that outran its stops while
   the lock was busy is caught up by its next stops or by `learn --transcripts`; its cursor never
   moves past what was read.
+- A transcript's cursor can read `N+K`: the turn that starts at byte N was longer than a window, and its
+  first K pieces are reflected. Nothing else reads it as a plain offset; use `split_cursor()`.
 
 ## Synchronisation rule
 

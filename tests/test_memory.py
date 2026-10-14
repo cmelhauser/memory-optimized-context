@@ -812,12 +812,12 @@ def test_backfill_reads_every_window_and_a_hook_two_oldest_first(m, tmp_path, mo
         hook, key = tmp_path / "hook.jsonl", f"transcript:{tmp_path / 'hook.jsonl'}"
         m.ingest_transcript(c, hook, "p")
         assert len(calls) == 2 and "marker000" in calls[0]             # oldest first, two windows
-        assert 0 < int(m.cursor(c, key)) < hook.stat().st_size         # only past what was read
+        assert 0 < m.split_cursor(m.cursor(c, key))[0] < hook.stat().st_size   # only past what was read
         for _ in range(30):                                            # the next stops catch up
-            if int(m.cursor(c, key)) == hook.stat().st_size:
+            if m.cursor(c, key) == str(hook.stat().st_size):
                 break
             m.ingest_transcript(c, hook, "p")
-        assert int(m.cursor(c, key)) == hook.stat().st_size
+        assert m.cursor(c, key) == str(hook.stat().st_size)
     sent = [p.split("<conversation>\n", 1)[1] for p in calls]
     assert all(sum(f"marker{i:03d}" in s for s in sent) == 1 for i in range(40)) and "".join(sent).count("y") == 450
 
@@ -2571,3 +2571,68 @@ def test_a_break_lock_a_dead_writer_left_does_not_stop_every_writer_for_good(m):
     with m.Lock(wait=3) as lk:
         assert lk.mine() and not m.BREAK.exists()
     assert time.time() - started < 2
+
+
+# ------------------------------------------------------------------ a cursor inside a long turn
+
+
+def long_turn_transcript(tmp_path, size=200, length=580):
+    """One turn of `length` characters (with its `USER: ` label) in pieces of `size`, among shorter ones."""
+    p = tmp_path / "long.jsonl"
+    transcript(p, [("user", "y" * length)], cwd="/home/me/GitHub/p")
+    return p
+
+
+def test_a_failure_inside_a_long_turn_resumes_at_the_next_piece(m, tmp_path, monkeypatch):
+    """A turn longer than a window is cut, and the pieces used to share one cursor, the start of the turn. A Reflector
+    failure part-way through left it there, so the next run sent the pieces already answered again, and each of their
+    lessons got a second vote."""
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli", transcript_chars=200))
+    p, calls = long_turn_transcript(tmp_path), []
+    key = f"transcript:{p}"
+    monkeypatch.setattr(m, "llm", failing_llm(calls, 2))
+    with m.db() as c:
+        with pytest.raises(m.ReflectorFailed):
+            m.ingest_transcript(c, p, "p", backfill=True)
+        assert m.cursor(c, key) == "0+2"                                   # two pieces done, inside the turn at offset 0
+        monkeypatch.setattr(m, "llm", tracing_llm(calls))
+        m.ingest_transcript(c, p, "p", backfill=True)
+        assert m.cursor(c, key) == str(p.stat().st_size)
+        assert c.execute("SELECT votes FROM lessons").fetchone()[0] == 3     # one per piece, not five
+    assert "".join(q.split("<conversation>\n", 1)[1] for q in calls).count("y") == 580
+
+
+def test_a_hook_resumes_inside_a_long_turn_and_commits_only_if_the_cursor_is_where_it_started(m, tmp_path, monkeypatch):
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli", transcript_chars=200))
+    p, calls = long_turn_transcript(tmp_path), []
+    key = f"transcript:{p}"
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    with m.db() as c:
+        m.set_cursor(c, key, "0+1")                                          # the first piece was reflected before
+    ahead = m.reflect_ahead(p, "p")
+    assert ahead["start"] == "0+1" and len(calls) == 2 and ahead["end"] is not None
+    assert "".join(q.split("<conversation>\n", 1)[1] for q in calls).count("y") == 386      # pieces two and three only
+    with m.db() as c:
+        m.set_cursor(c, key, "0+2")                                          # another reader moved it meanwhile
+        assert m.commit_reflection(c, ahead) == [] and m.cursor(c, key) == "0+2"
+        m.set_cursor(c, key, "0+1")
+        assert len(m.commit_reflection(c, ahead)) == 2 and m.cursor(c, key) == str(p.stat().st_size)
+
+
+def test_a_cursor_inside_a_turn_that_is_no_longer_long_is_read_whole_not_skipped(m, tmp_path, monkeypatch):
+    """Windows of another size than when the cursor was written: better to read a turn again than to lose its text."""
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli", transcript_chars=200))
+    p, calls = long_turn_transcript(tmp_path), []
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    with m.db() as c:
+        m.set_cursor(c, f"transcript:{p}", "0+9")                            # nine pieces done, but there are only three
+        m.ingest_transcript(c, p, "p", backfill=True)
+    assert len(calls) == 3
+    short = tmp_path / "short.jsonl"
+    transcript(short, [("user", "a short turn")], cwd="/home/me/GitHub/p")
+    calls.clear()
+    with m.db() as c:
+        m.set_cursor(c, f"transcript:{short}", "0+1")
+        m.ingest_transcript(c, short, "p", backfill=True)
+    assert len(calls) == 1
+
