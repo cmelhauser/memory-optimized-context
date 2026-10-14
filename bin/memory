@@ -69,6 +69,11 @@ def clean_lesson(text):
     s = " ".join(CONTROL.sub(" ", scrub(text)).split())
     return s if len(s) <= LESSON_MAX else s[:LESSON_MAX - 1].rstrip() + "…"
 
+def slugify(name):
+    """A folder or repository name as a slug: `Obsidian Vault` is `obsidian-vault`, `.dotfiles` is `dotfiles`. A name that
+    is not one used to be stored as the project and then never compiled, the lessons filed under it unreachable."""
+    return re.sub(r"[^a-z0-9._-]+", "-", str(name).lower()).strip("._-")[:SLUG_MAX].strip("._-") or "all"
+
 def as_project(value, default):
     """A slug the store and the filesystem both accept, or `default`. The Reflector chooses the slug from text that
     reached a session, so `../` and friends must not survive the trip to `compiled/projects/<slug>.md`."""
@@ -378,7 +383,10 @@ def fts_query(q):
     toks = re.findall(r"[\w.\-]+", q, re.UNICODE)
     return " OR ".join(f'"{t}"' for t in toks) if toks else '""'
 
+SEARCH_K_MAX, QUERY_MAX = 100, 1000   # a negative k sliced from the end; a query of 300,000 tokens took 106 s
+
 def search(c, q, project=None, k=8, include_archived=False):
+    k, q = max(1, min(int(k), SEARCH_K_MAX)), str(q)[:QUERY_MAX]
     where = " AND l.state!='merged'" if include_archived else " AND l.state='active'"
     pw, pa = ("", ()) if not project else (" AND l.project IN (?, 'all')", (project.lower(),))
     ranks = {}
@@ -695,6 +703,7 @@ def inside_turn(offset, k):
     return f"{offset}+{k}"
 
 def ingest_transcript(c, path, project, backfill=False):
+    path = os.path.abspath(path)           # one cursor however the path is spelled, `tr/s.jsonl` or `../tr/s.jsonl`
     """Reflect a transcript from its cursor, window by window, moving the cursor after each, so a ReflectorFailed
     part-way costs none of the windows already reflected. A backfill reads every window. A Stop hook reads at most
     HOOK_WINDOWS, oldest first: a stop follows every turn, so that is usually one call, and a session whose earlier
@@ -734,6 +743,7 @@ def reflect_ahead(path, project):
     offset past it, and the transcript's end when every window it holds was read. A hook used to reflect holding the
     store's lock, 20 to 60 s a call, and every other session or subagent that stopped meanwhile waited 20 s and gave
     up: about half of all stops in October 2026. A failure keeps the windows answered before it."""
+    path = os.path.abspath(path)
     key = f"transcript:{path}"
     with db() as c:
         was, known = str(cursor(c, key) or 0), known_projects(c)
@@ -964,16 +974,23 @@ def reflect_batches(c, chunks, project, label, done=lambda name: None):
     return new
 
 def git(repo, *args):
-    r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=False)
+    # A commit message in latin-1, which git stores as it was written, would raise at the strict decoding `text=True`
+    # means, and every `learn --repo` of that repository would die there for good.
+    r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     return r.stdout if r.returncode == 0 else ""
 
 def git_ok(repo, *args):
     """For commands whose success is silent (cat-file -e): the exit status, not stdout."""
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=False).returncode == 0
 
+def inside(f, root):
+    """Whether a file is the root's own: not a symlink, and not under a directory that is one leading out. A cloned
+    repository or a notes folder can hold `README.md -> ~/.ssh/...`, and `learn --all` reads every clone."""
+    return f.is_file() and not f.is_symlink() and f.resolve().is_relative_to(root.resolve()) and f.stat().st_size <= 2_000_000
+
 def repo_slug(path):
     top = git(path, "rev-parse", "--show-toplevel").strip() or str(path)
-    return Path(top).name.lower()[:SLUG_MAX]
+    return slugify(Path(top).name)
 
 def take_docs(c, files, key_of, name_of):
     """Upsert each changed file's `[proj] fact` lines now; return its prose for the Reflector and a callback that marks
@@ -1014,7 +1031,7 @@ def learn_repo(c, path, since=None):
             set_cursor(c, key, head)
         files = []
         for g in DOC_GLOBS:   # README.md matches two globs; each file is read once
-            files += [f for f in sorted(path.glob(g)) if f not in files and f.is_file() and ".git" not in f.parts and f.stat().st_size <= 2_000_000]
+            files += [f for f in sorted(path.glob(g)) if f not in files and ".git" not in f.parts and inside(f, path)]
         got, docs, done = take_docs(c, files, lambda f: f"repo:{path}:doc:{f.relative_to(path)}", lambda f: str(f.relative_to(path)))
         new += checkpoint(c, got)
         if docs: new += checkpoint(c, reflect_batches(c, docs, project, f"documentation of {project}", done))
@@ -1022,9 +1039,9 @@ def learn_repo(c, path, since=None):
 
 def learn_notes(c, folder, project=None):
     """Every .md/.txt under folder. `[proj] fact` lines are ingested directly; everything else goes to the Reflector."""
-    folder = Path(folder).expanduser().resolve(); project = (project or folder.name).lower(); new = []
+    folder = Path(folder).expanduser().resolve(); project = slugify(project or folder.name); new = []
     with carrying(new):
-        files = [f for f in sorted(list(folder.rglob("*.md")) + list(folder.rglob("*.txt"))) if f.is_file()]
+        files = [f for f in sorted(list(folder.rglob("*.md")) + list(folder.rglob("*.txt"))) if inside(f, folder)]
         got, prose, done = take_docs(c, files, lambda f: f"notes:{f}", lambda f: str(f.relative_to(folder)))
         new += checkpoint(c, got)
         if prose: new += checkpoint(c, reflect_batches(c, prose, project, f"notes in {folder.name}", done))
@@ -1035,7 +1052,7 @@ def project_of(cwd):
     lowercased. A Claude Code worktree (<repo>/.claude/worktrees/<name>) belongs to <repo>, whose
     CLAUDE.md is the one that imports compiled/projects/<slug>.md."""
     m = re.search(r"([^/]+)/\.claude/worktrees/", str(cwd))
-    return (m.group(1) if m else Path(cwd).name).lower()[:SLUG_MAX] or "all"
+    return slugify(m.group(1) if m else Path(cwd).name)
 
 def line_cwd(raw):
     """The `cwd` on one transcript line; None for a line without one, or one that is not a JSON object. Claude Code
@@ -1044,7 +1061,8 @@ def line_cwd(raw):
     except ValueError: return None
     if not isinstance(j, dict): return None
     pay = j.get("payload")
-    return j.get("cwd") or (pay.get("cwd") if isinstance(pay, dict) else None)
+    cwd = j.get("cwd") or (pay.get("cwd") if isinstance(pay, dict) else None)
+    return cwd if isinstance(cwd, str) else None             # `"cwd": 5` is not a place
 
 def transcript_cwd(files):
     """The first `cwd` recorded in any of these transcripts: Claude Code stamps it on every turn, a Codex rollout
@@ -1077,11 +1095,11 @@ def claude_code_project_dirs(root=None):
     they ran beneath them (`<session>/subagents/`, a workflow's agents), which were once not read at all."""
     root = Path(root or Path.home() / ".claude" / "projects")
     for d in sorted(root.glob("*/")):
-        found = sorted(d.glob("*.jsonl")) + sorted(f for f in d.glob("*/**/*.jsonl") if f.is_file())
+        found = sorted(f for f in d.glob("*.jsonl") if f.is_file()) + sorted(f for f in d.glob("*/**/*.jsonl") if f.is_file())
         files = [f for f in found if not reflector_transcript(f)]
         if found and not files: continue   # a folder holding only the Reflector's own sessions
         cwd = transcript_cwd(files)
-        yield (project_of(cwd) if cwd else d.name.rstrip("-").rsplit("-", 1)[-1].lower() or "all"), files
+        yield (project_of(cwd) if cwd else slugify(d.name.rstrip("-").rsplit("-", 1)[-1])), files
 
 def machine_roots():
     """Where this machine keeps transcripts, resolved when asked rather than at import, because HOME is what the tests
@@ -1104,7 +1122,7 @@ def cursor_project_dirs(root=None):
     hooks, so new sessions arrive through the Stop hook; this is for everything written before the hooks existed."""
     root = Path(root or machine_roots()["cursor"])
     for d in sorted(root.glob("*/")):
-        files = sorted(d.rglob("*.jsonl"))       # a session's transcript, and its subagents' beside it
+        files = sorted(f for f in d.rglob("*.jsonl") if f.is_file())   # a session's transcript, and its subagents' beside it
         if not files: continue
         cwd = decode_cwd(d.name)
         yield ((cwd and repo_of(cwd)) or "cursor"), files   # a folder for a path that is gone belongs to the tool
@@ -1114,7 +1132,7 @@ def loose_transcripts(root, slug):
     rollout store, or whatever `--transcripts-from` names. A session run inside a repository is filed under it; the
     rest are filed under `slug`, because they belong to the tool rather than to a project."""
     for f in sorted(Path(root).rglob("*.jsonl")):
-        if reflector_transcript(f): continue
+        if not f.is_file() or reflector_transcript(f): continue
         cwd = transcript_cwd([f])
         yield ((cwd and repo_of(cwd)) or slug), [f]
 
@@ -1217,7 +1235,7 @@ def cmd_hook(a):
     msg = j.get("last_assistant_message", "") or ""
     lines = [ln.strip() for ln in msg.split("LESSONS:", 1)[1].splitlines() if LESSON_RE.match(ln.strip())] if "LESSONS:" in msg else []
     journal_write(lines, a.role)
-    project = a.project or project_of(j.get("cwd") or os.getcwd())
+    project = slugify(a.project) if a.project else project_of(j.get("cwd") if isinstance(j.get("cwd"), str) and j.get("cwd") else os.getcwd())
     tp = j.get("transcript_path")
     claim = claim_transcript(tp) if tp and Path(tp).exists() and CFG["llm"] != "none" else None
     try:
@@ -1262,8 +1280,12 @@ def cmd_ingest(a):
 def cmd_learn(a):
     """Read everything once, then only what changed. Idempotent; cursors live in `sources`. At the first
     ReflectorFailed it stops, keeps and compiles what was read, and exits non-zero; the next run resumes there."""
-    missing = [r for r in a.repo or [] if not Path(r).expanduser().is_dir()]
-    if missing: sys.exit(f"memory: learn --repo: no such folder: {', '.join(missing)}")   # a typo must not pass for success
+    opt = vars(a).get                             # a few callers pass only the options they use
+    for flag, paths, folder in (("--repo", opt("repo"), True), ("--notes", [opt("notes")], True), ("--repos", [opt("repos")], True),
+                                ("--exports", [opt("exports")], True), ("--transcripts-from", opt("transcripts_from"), True),
+                                ("--export", opt("export"), False)):
+        missing = [r for r in paths or [] if r and not (Path(r).expanduser().is_dir() if folder else Path(r).expanduser().is_file())]
+        if missing: sys.exit(f"memory: learn {flag}: no such {'folder' if folder else 'file'}: {', '.join(missing)}")   # a typo must not pass for success
     BUDGET.update(max=a.max_calls, used=0, answered=0)
     with Lock(), db() as c:
         new = ingest_journal(c)
@@ -1304,6 +1326,16 @@ def cmd_vote(a):
         c.commit(); compile_(c); c.commit()
     if not voted: sys.exit(f"memory: no lesson has id {a.id}; `memory search` prints the id beside each one")
 
+def mcp_transport_security(extra=()):
+    """Which Host and Origin an HTTP request may carry. The SDK checks them only when it is told where it listens, and
+    `--host 0.0.0.0`, which the image passes, left the check off: a web page could rebind its own name to the published
+    loopback port and write lessons, or archive them. Loopback names always; `--allowed-host` adds more."""
+    from mcp.server.transport_security import TransportSecuritySettings
+    hosts = ["127.0.0.1", "localhost", "[::1]", *extra]
+    return TransportSecuritySettings(enable_dns_rebinding_protection=True,
+                                     allowed_hosts=[f"{h}{s}" for h in hosts for s in ("", ":*")],
+                                     allowed_origins=[f"http://{h}{s}" for h in hosts for s in ("", ":*")])
+
 def cmd_mcp(a):
     """MCP server. Works with mcp 1.x (FastMCP) and 2.x (MCPServer). Over HTTP it listens on loopback unless told
     otherwise: it has no authentication, and every interface put anyone on the network one request from the store.
@@ -1314,7 +1346,8 @@ def cmd_mcp(a):
         try:
             from mcp.server.fastmcp import FastMCP as Server; v2 = False
         except ImportError: raise SystemExit("pip install mcp") from None
-    srv = Server("memory") if v2 else Server("memory", host=a.host, port=a.port)
+    sec = {"transport_security": mcp_transport_security(vars(a).get("allowed_host") or [])} if a.transport == "http" else {}
+    srv = Server("memory") if v2 else Server("memory", host=a.host, port=a.port, **sec)
 
     @srv.tool()
     def recall(query: str, project: str = "", k: int = 8) -> str:
@@ -1349,7 +1382,7 @@ def cmd_mcp(a):
         return "ok" if voted else f"no lesson has id {lesson_id}"
 
     if a.transport == "http":
-        srv.run(transport="streamable-http", host=a.host, port=a.port) if v2 else srv.run(transport="streamable-http")
+        srv.run(transport="streamable-http", host=a.host, port=a.port, **sec) if v2 else srv.run(transport="streamable-http")
     else:
         srv.run(transport="stdio")
 
@@ -1404,6 +1437,7 @@ def main():
     s.add_argument("--transport", choices=["stdio", "http"], default="stdio", help="stdio for Claude Desktop, http for the container (default stdio)")
     s.add_argument("--port", type=int, default=8765, help="port for --transport http (default 8765)")
     s.add_argument("--host", default="127.0.0.1", help="address for --transport http to listen on (default 127.0.0.1, this machine only)")
+    s.add_argument("--allowed-host", action="append", help="a Host name an HTTP request may carry besides localhost, 127.0.0.1 and [::1] (repeatable)")
     s.set_defaults(f=cmd_mcp)
     a = ap.parse_args(); a.f(a)
 

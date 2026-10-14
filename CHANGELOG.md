@@ -7,6 +7,23 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+### Fixed
+
+- A review of the adapters and the MCP server found these, each reproduced. A symlink in a cloned repository or a
+  notes folder (`README.md -> ~/.ssh/...`, or a `docs` that leads out) made `learn --all`, which reads every clone,
+  send what it pointed to to the Reflector: an adapter now reads only files that are its root's own, at most
+  2 MB, notes included. A commit message in latin-1 made every `learn --repo` of that repository raise at
+  git's strict decoding: it is decoded with replacement. The HTTP MCP server, run with `--host 0.0.0.0` as the
+  image runs it, did not check the `Host` header, so a web page that rebound its own name to the published
+  loopback port could write or archive lessons: only loopback names are accepted now, `--allowed-host` adds
+  more. A folder or repository name that is not a slug (`Obsidian Vault`, `.dotfiles`) was stored as the project
+  and never compiled: it is made a slug (`obsidian-vault`). `learn` with a `--notes`, `--repos`, `--exports`,
+  `--transcripts-from` or `--export` that does not exist exited 0 having read nothing, or with a traceback: it
+  names the path and stops. A transcript's cursor depended on how its path was spelled, so a relative and an
+  absolute path both read it, each lesson getting two votes. A negative `-k` returned all but the last results,
+  a very long query took minutes, `"cwd": 5` in a transcript raised, and a directory named `x.jsonl` raised.
+  `test_a_symlink_cannot_make_an_adapter_read_outside_its_root`,
+  `test_the_http_server_refuses_a_host_it_was_not_told_to_expect`.
 ## [0.2.3] - 2026-10-14
 
 ### Fixed

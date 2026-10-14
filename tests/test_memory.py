@@ -1139,9 +1139,13 @@ def test_mcp_tools_answer_on_both_mcp_versions_and_transports(m, monkeypatch):
         if transport == "stdio":
             assert srv.runs == [{"transport": "stdio"}]
         elif v2:
+            sec = srv.runs[0].pop("transport_security")
             assert srv.runs == [{"transport": "streamable-http", "host": "127.0.0.1", "port": 9999}] and srv.kwargs == {}
+            assert "localhost:*" in sec.allowed_hosts and sec.enable_dns_rebinding_protection
         else:
+            sec = srv.kwargs.pop("transport_security")
             assert srv.runs == [{"transport": "streamable-http"}] and srv.kwargs == {"host": "127.0.0.1", "port": 9999}
+            assert "http://localhost:*" in sec.allowed_origins
     cmd = [ln for ln in (REPO / "Dockerfile").read_text().splitlines() if ln.startswith("CMD ")]
     assert json.loads(cmd[0][len("CMD "):]) == ["mcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8765"]
     # exec form or nothing: a comment after the array once made Docker run it through /bin/sh, and the image's
@@ -2854,4 +2858,104 @@ def test_a_remembered_lesson_is_reported_as_saved_only_as_it_will_be_stored(m):
 def test_install_nightly_rejects_a_budget_of_zero_however_it_is_written(tmp_path):
     r = install_nightly(fake_tools(tmp_path, "Darwin"), "--calls", "00")
     assert r.returncode == 2 and "positive" in r.stderr
+
+
+# ------------------------------------------------------------------ what an adapter may read, and where it may put it
+
+
+def test_a_symlink_cannot_make_an_adapter_read_outside_its_root(m, tmp_path, monkeypatch):
+    """`learn --all` reads every clone in a folder, and a cloned repository can hold `README.md -> ~/.ssh/...`, or a
+    `docs` that is a link to a folder anywhere: what they point to went to the Reflector."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("TOP-SECRET-KEY-MATERIAL")
+    (outside / "deep.md").write_text("DEEP-OUTSIDE-NOTE")
+    repo = git_repo(tmp_path / "alpha", "alpha")
+    (repo / "README.md").unlink()
+    (repo / "README.md").symlink_to(outside / "secret.txt")
+    (repo / "docs").symlink_to(outside)
+    (repo / "AGENTS.md").symlink_to(repo / "CLAUDE.md")                      # a link inside the root is skipped too: a duplicate
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "own.md").write_text("an honest note")
+    (notes / "leak.txt").symlink_to(outside / "secret.txt")
+    (notes / "big.txt").write_text("x" * 2_100_000)                          # over the size cap, as repo docs are
+    calls = []
+    monkeypatch.setattr(m, "llm", tracing_llm(calls))
+    with m.db() as c:
+        m.learn_repo(c, repo)
+        m.learn_notes(c, notes)
+    sent = "".join(calls)
+    assert "TOP-SECRET" not in sent and "DEEP-OUTSIDE" not in sent and "an honest note" in sent and "xxxxxxxx" not in sent
+    assert sent.count("Prose about alpha") == 1
+
+
+def test_a_commit_message_that_is_not_utf8_does_not_end_every_learn(m, tmp_path, monkeypatch):
+    repo = git_repo(tmp_path / "alpha", "alpha")
+    (repo / "f.txt").write_text("x")
+    msg = tmp_path / "msg"
+    msg.write_bytes(b"caf\xe9 au lait: decide on --safe\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-F", str(msg)], check=True, capture_output=True)
+    monkeypatch.setattr(m, "llm", tracing_llm([]))
+    with m.db() as c:
+        assert m.learn_repo(c, repo)
+
+
+def test_a_folder_or_repository_name_becomes_a_slug_that_compiles(m, tmp_path, monkeypatch):
+    assert [m.slugify(n) for n in ("Obsidian Vault", ".dotfiles", "_sandbox", "café", "---", "A" * 100)] == [
+        "obsidian-vault", "dotfiles", "sandbox", "caf", "all", "a" * 64]
+    assert m.project_of("/home/me/My App") == "my-app" and m.project_of(pathlib.Path("/")) == "all"
+    notes = tmp_path / "Obsidian Vault"
+    notes.mkdir()
+    (notes / "n.md").write_text("[all] a tagged line\n\nsome prose")
+    monkeypatch.setattr(m, "llm", fake_llm([{"project": "", "text": "from the vault"}], {}))
+    with m.db() as c:
+        m.learn_notes(c, notes)
+        c.commit(); m.compile_(c)
+    assert "from the vault" in (m.COMPILED / "projects" / "obsidian-vault.md").read_text()
+
+
+@pytest.mark.parametrize("flag, value", [("--notes", "/no/such"), ("--repos", "/no/such"), ("--exports", "/no/such"),
+                                         ("--transcripts-from", "/no/such"), ("--export", "/no/such.json")])
+def test_learn_refuses_a_path_that_does_not_exist_not_a_run_that_read_nothing(m, flag, value, capsys):
+    sys.argv = ["memory", "learn", flag, value]
+    with pytest.raises(SystemExit) as e:
+        m.main()
+    assert "no such" in str(e.value) and flag in str(e.value)
+
+
+def test_search_bounds_its_arguments_and_transcripts_name_one_cursor_however_spelled(m, tmp_path, monkeypatch):
+    with m.db() as c:
+        for i in range(4): m.upsert(c, "p", f"alpha fact {i}")
+        assert len(m.search(c, "alpha", k=-1)) == 1 and len(m.search(c, "alpha", k=0)) == 1
+        assert len(m.search(c, "alpha " * 5000, k=10 ** 6)) == 4                  # a long query is cut, not 106 s of work
+    assert m.line_cwd(b'{"cwd": 5}') is None and m.line_cwd(b'{"cwd": "/a"}') == "/a"
+    (tmp_path / "x.jsonl").mkdir()
+    assert list(m.loose_transcripts(tmp_path, "tool")) == []                      # a directory is no transcript
+    work = tmp_path / "work"
+    work.mkdir()
+    transcript(work / "s.jsonl", [("user", "set maxconn"), ("assistant", "done")])
+    monkeypatch.setattr(m, "llm", fake_llm([{"project": "p", "text": "maxconn=1024"}], {}))
+    monkeypatch.chdir(work)
+    with m.db() as c:
+        assert m.ingest_transcript(c, "s.jsonl", "p")
+        assert m.ingest_transcript(c, str(work / "s.jsonl"), "p") == [] and m.ingest_transcript(c, "../work/s.jsonl", "p") == []
+
+
+def test_the_http_server_refuses_a_host_it_was_not_told_to_expect(m):
+    """The SDK checks Host and Origin only for the host it is told it listens on, and `--host 0.0.0.0` (the image's) left
+    it off: a web page that rebinds its own name to the published loopback port could write lessons."""
+    mcpserver = pytest.importorskip("mcp.server.mcpserver")
+    from starlette.testclient import TestClient
+    sec = m.mcp_transport_security(["memory.internal"])
+    assert "memory.internal:*" in sec.allowed_hosts and "http://memory.internal" in sec.allowed_origins
+    body = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    def status(host):
+        app = mcpserver.MCPServer("t").streamable_http_app(transport_security=sec, host="0.0.0.0")   # one app per client
+        with TestClient(app, base_url=f"http://{host}:8765") as client:
+            return client.post("/mcp", json=body, headers=headers).status_code
+    assert status("evil.example") == 421 and status("localhost") != 421
 
