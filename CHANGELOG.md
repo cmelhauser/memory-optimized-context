@@ -7,6 +7,14 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+### Fixed
+
+- Gemini activity is cut into pieces like a transcript, and they shared one cursor too: a failure part-way
+  through a long record re-sent the pieces already answered and double-voted them. Its cursor, a time, now reads
+  `<time>|<k>` inside such a record. A lesson that was archived, met again from an old source and pruned again
+  added a second line to the month's archive file each time; it adds one.
+  `test_a_failure_inside_a_long_gemini_record_resumes_at_the_next_piece`.
+
 ## [0.2.2] - 2026-10-14
 
 ### Fixed

@@ -89,7 +89,8 @@ before editing either.
   the lock was busy is caught up by its next stops or by `learn --transcripts`; its cursor never
   moves past what was read.
 - A transcript's cursor can read `N+K`: the turn that starts at byte N was longer than a window, and its
-  first K pieces are reflected. Nothing else reads it as a plain offset; use `split_cursor()`.
+  first K pieces are reflected. Nothing else reads it as a plain offset; use `split_cursor()`. Gemini's
+  cursor, a time, reads `<time>|<k>` for the same reason (a time has a `+` of its own).
 
 ## Synchronisation rule
 

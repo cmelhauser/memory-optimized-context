@@ -878,11 +878,15 @@ def gemini_turns(records, since=None):
 def ingest_gemini(c, records):
     """Gemini Apps activity from Google Takeout (My Activity → Gemini Apps, as JSON). It holds no conversations, only
     a stream of prompts, so it has one cursor, the time of the last one read, and a later Takeout, which repeats
-    everything before it, adds only what is newer. It is read in windows, the cursor moved after each."""
+    everything before it, adds only what is newer. It is read in windows, the cursor moved after each, and inside a
+    turn longer than a window piece by piece: `<time>|<k>` says k pieces of the turn after that time are reflected.
+    (A transcript's `N+K` would not do: a time has a `+` in its zone.)"""
     key, new = "gemini:activity", []
-    start = cursor(c, key) or ""
+    start, _, pieces = (cursor(c, key) or "").partition("|")
     with carrying(new):
-        for text, done in turn_windows(gemini_turns(records, instant(start)), start, CFG["transcript_chars"]):
+        windows = turn_windows(gemini_turns(records, instant(start)), start, CFG["transcript_chars"], int(pieces or 0),
+                               lambda time_, k: f"{time_}|{k}")
+        for text, done in windows:
             with seen_at(done): got = [upsert(c, p, t) for p, t in reflect(text, "gemini", known_projects(c))]
             set_cursor(c, key, done)
             new += checkpoint(c, got)
@@ -1151,8 +1155,12 @@ def prune(c):
             c.execute("UPDATE lessons SET state='archived' WHERE id=?", (r["id"],)); archived.append(r)
     if archived:
         ARCHIVE.mkdir(exist_ok=True)
-        with open(ARCHIVE / f"{datetime.now():%Y-%m}.md", "a") as f:
-            for r in archived: f.write(f"- [{r['project']}] {r['text']}  <!-- {r['id']} votes={r['votes']} last={r['last_seen'][:10]} -->\n")
+        month = ARCHIVE / f"{datetime.now():%Y-%m}.md"
+        have = month.read_text() if month.exists() else ""
+        with open(month, "a") as f:
+            for r in archived:
+                if f"<!-- {r['id']} " in have: continue      # met again from an old source and re-archived: one line
+                f.write(f"- [{r['project']}] {r['text']}  <!-- {r['id']} votes={r['votes']} last={r['last_seen'][:10]} -->\n")
     return len(archived)
 
 def atomic_write(path, text):

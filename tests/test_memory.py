@@ -2792,3 +2792,34 @@ def test_install_nightly_says_what_is_wrong_with_a_missing_or_absurd_value(tmp_p
     r = install_nightly(fake_tools(tmp_path, "Darwin"), *args)
     assert r.returncode == 2 and r.stderr
 
+
+# ------------------------------------------------------------------ Gemini's cursor inside a turn, and the archive
+
+
+def test_a_failure_inside_a_long_gemini_record_resumes_at_the_next_piece(m, tmp_path, monkeypatch):
+    """Gemini activity is cut like a transcript, and its cursor is a time, which has a `+` of its own: the pieces of a
+    long record shared the cursor before it, so a failure part-way re-sent the pieces already answered."""
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli", transcript_chars=200))
+    export = tmp_path / "gemini.json"
+    export.write_text(json.dumps([gemini("Prompted q", "2026-03-01T10:00:00+00:00", "<p>" + "z" * 500 + "</p>")]))
+    calls = []
+    monkeypatch.setattr(m, "llm", failing_llm(calls, 1))
+    with m.db() as c:
+        with pytest.raises(m.ReflectorFailed):
+            m.ingest_export(c, export)
+        assert m.cursor(c, "gemini:activity") == "|1"                       # one piece done, in the turn after no time at all
+        monkeypatch.setattr(m, "llm", tracing_llm(calls))
+        m.ingest_export(c, export)
+        assert m.cursor(c, "gemini:activity").startswith("2026-03-01T10:00:00") and "|" not in m.cursor(c, "gemini:activity")
+        assert c.execute("SELECT votes FROM lessons WHERE text LIKE 'lesson from%'").fetchone()[0] == 3     # one per piece
+    assert "".join(q.split("<conversation>\n", 1)[1] for q in calls).count("z") == 500
+
+
+def test_a_lesson_met_again_from_an_old_source_is_archived_once_a_month(m):
+    with m.db() as c:
+        with m.seen_at("2020-01-01T00:00:00Z"): m.upsert(c, "p", "an old lesson")
+        c.commit(); m.compile_(c); c.commit()
+        with m.seen_at("2020-01-02T00:00:00Z"): m.upsert(c, "p", "an old lesson")    # reactivated, then pruned again
+        c.commit(); m.compile_(c); c.commit()
+    assert sum(f.read_text().count("an old lesson") for f in m.ARCHIVE.glob("*.md")) == 1
+
