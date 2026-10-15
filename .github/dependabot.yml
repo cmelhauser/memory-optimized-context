@@ -1,5 +1,9 @@
-# Weekly updates for what the pins would otherwise leave to age: the commit-pinned actions, the dev tools' floors,
-# and the image's base. Each arrives as a pull request, and CI is the verdict on it like any other.
+# Weekly updates for what the pins would otherwise leave to age: the commit-pinned actions and the image's base.
+# Each arrives as a pull request, and CI is the verdict on it like any other.
+#
+# Not here: pip. `requirements-dev.txt` holds floors, which CI does not honour (it installs the newest anyway), so a
+# bump changed nothing but the file. Add it back when the dev tools are locked with hashes. And the base image moves
+# by patch only: CI covers Python 3.10 to 3.13 and the image targets 3.12, so a jump to another minor is for a person.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -9,12 +13,10 @@ updates:
     groups:
       actions:
         patterns: ["*"]
-  - package-ecosystem: pip
-    directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 3
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]

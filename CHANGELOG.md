@@ -7,6 +7,13 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+### Changed
+
+- Dependabot no longer watches `requirements-dev.txt`, whose floors CI does not honour, so its first five pull requests
+  changed nothing but that file, and it moves the image's base by patch only: its first docker pull request was a
+  jump to Python 3.14, which CI does not cover. Both are closed with a reason. Its pull request for the six pinned
+  actions was merged: CI had run on it.
+
 ## [0.2.5] - 2026-10-15
 
 ### Added
