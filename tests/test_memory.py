@@ -3265,3 +3265,8 @@ def test_a_compile_that_changes_nothing_makes_no_commit(tmp_path, monkeypatch):
     log = subprocess.run(["git", "-C", str(root), "log", "--oneline"], capture_output=True, text=True, check=True).stdout.splitlines()
     assert len(log) == 1
 
+
+def test_dependabot_watches_the_actions_the_dev_tools_and_the_image():
+    text = (REPO / ".github" / "dependabot.yml").read_text()
+    assert all(f"package-ecosystem: {e}" in text for e in ("github-actions", "pip", "docker")) and "interval: weekly" in text
+

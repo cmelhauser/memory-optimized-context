@@ -1,0 +1,20 @@
+# Weekly updates for what the pins would otherwise leave to age: the commit-pinned actions, the dev tools' floors,
+# and the image's base. Each arrives as a pull request, and CI is the verdict on it like any other.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
