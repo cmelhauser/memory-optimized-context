@@ -18,7 +18,8 @@ before editing either.
 
 ## Invariants the tests enforce
 
-- A journal file is created with `open(path, "x")` and is never opened for writing again.
+- A journal file appears whole, hard-linked (`os.link`, which fails if the name exists) from a `.part` file that
+  `ingest_journal` does not read, and is never opened for writing again.
 - Every write to `compiled/` or the database happens inside `with Lock():`.
 - A lesson's `first_seen` and `last_seen` are when its source was written (`seen_at`): a transcript's or
   journal file's modification time, an export's update time, always written in UTC. A source dated ahead of the
@@ -52,6 +53,9 @@ before editing either.
   only a loopback `Host` and `Origin` (plus `--allowed-host`), whatever `--host` it listens on.
 - A `[proj] fact` line in a repository's own docs is a lesson only for that repository's slug; one for `all` or
   another project is prose for the Reflector. In `--notes` it may name any project: they are the operator's own.
+- What `compiled/` holds is cleaned where it is written (`compiled_text`): one line, at most 500 characters, and
+  every `@path` broken with a zero-width space, since Claude Code imports an `@path` anywhere in a line.
+- The store's commit adds only `.gitignore`, `archive`, `compiled` and `journal`, logs a failure, and gives git 60 s.
 - A writer that cannot get the lock raises `LockBusy`; the MCP tools answer "busy" and the
   server keeps running.
 - A lock holder touches `.lock` every 60 s, and only a lock untouched for 600 s is broken as a

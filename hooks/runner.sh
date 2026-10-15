@@ -1,4 +1,5 @@
-# Sourced by compile.sh and journal.sh. Sets RUN, the command that invokes bin/memory:
+# Sourced by compile.sh and journal.sh. Sets RUN, an array holding the command that invokes bin/memory, so a checkout
+# whose path has a space or a quote in it still runs (`"${RUN[@]}"`):
 #
 #   1. MEMORY_RUNNER, when set.
 #   2. The container, when this checkout's .env holds an ANTHROPIC_API_KEY. Compose will not start
@@ -13,9 +14,12 @@
 # shellcheck shell=bash disable=SC2034  # RUN is read by the hook that sources this file
 PATH="$PATH:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-key=$(sed -n 's/^ANTHROPIC_API_KEY=//p' "$repo/.env" 2>/dev/null | tail -n 1)
+# The key as the file spells it: no carriage return (a file edited on Windows), no space, no quotes. A key written
+# as "" is no key, and must not send the hooks to a container that is not there.
+key=$(sed -n 's/^ANTHROPIC_API_KEY=//p' "$repo/.env" 2>/dev/null | tail -n 1 | tr -d '\r' \
+      | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e "s/^[\"']//" -e "s/[\"']\$//")
 if [ -n "${MEMORY_RUNNER:-}" ]; then
-  RUN=$MEMORY_RUNNER
+  if [ -x "$MEMORY_RUNNER" ]; then RUN=("$MEMORY_RUNNER"); else read -r -a RUN <<<"$MEMORY_RUNNER"; fi   # a program, or a command and its arguments
 else
   case $key in
     '' | *...*)   # absent, or the .env.example placeholder
@@ -23,8 +27,8 @@ else
       for c in "$repo/.venv/bin/python3" /opt/homebrew/bin/python3 /usr/local/bin/python3; do
         if [ -x "$c" ]; then py=$c; break; fi
       done
-      RUN="$py $repo/bin/memory" ;;
+      RUN=("$py" "$repo/bin/memory") ;;
     *)
-      RUN="docker exec -i memory python3 /app/memory" ;;
+      RUN=(docker exec -i memory python3 /app/memory) ;;
   esac
 fi

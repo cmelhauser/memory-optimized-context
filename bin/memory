@@ -53,7 +53,7 @@ def NOW():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 SLUG_MAX = 64                                      # `compile_` makes a slug a filename, and the OS refuses a long one
 SLUG = rf"[a-z0-9][a-z0-9._-]{{0,{SLUG_MAX - 1}}}"
-LESSON_RE = re.compile(rf"^\[({SLUG})\]\s+(.+?)\s*$", re.I)
+LESSON_RE = re.compile(rf"^\[({SLUG})\]\s+(\S.*)$", re.I)   # linear: a lazy `.+?` before `\s*$` was quadratic on a long run of spaces
 PROJECT_RE = re.compile(SLUG)                      # a slug is a name, so never a path
 LESSON_MAX = 500                                   # characters: a lesson is a sentence, and it is imported into every session
 CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
@@ -73,6 +73,14 @@ def slugify(name):
     """A folder or repository name as a slug: `Obsidian Vault` is `obsidian-vault`, `.dotfiles` is `dotfiles`. A name that
     is not one used to be stored as the project and then never compiled, the lessons filed under it unreachable."""
     return re.sub(r"[^a-z0-9._-]+", "-", str(name).lower()).strip("._-")[:SLUG_MAX].strip("._-") or "all"
+
+IMPORT_AT = re.compile(r"(?<![\w@])@(?=[\w~./-])")
+
+def compiled_text(text):
+    """A lesson as it is written into the file every session imports. Rows stored before `clean_lesson` existed can hold
+    newlines and any length, so it is applied again here; and an `@path` anywhere in a line is an import to Claude Code,
+    not only at the start of one, so each is broken with a zero-width space (the lesson still reads the same)."""
+    return IMPORT_AT.sub("@\u200b", clean_lesson(text))
 
 def as_project(value, default):
     """A slug the store and the filesystem both accept, or `default`. The Reflector chooses the slug from text that
@@ -593,15 +601,21 @@ def recheck_owed(c):
 # ---------------------------------------------------------------- adapters
 def journal_write(lines, role="manual"):
     """One new file per event; never appends. lines = ['[proj] text', ...].
-    Exclusive create ('x') plus a nanosecond stamp: two events in the same process, same tick, still get two files."""
+    The file appears whole or not at all: it is written under a `.part` name, which `ingest_journal` does not read, and
+    hard-linked to its name, which fails if that exists. Creating the name first and writing into it left a moment
+    in which an ingest could read an empty file, record it as read, and never see the lesson. A nanosecond stamp: two
+    events in the same process, same tick, still get two files."""
     if not lines: return None
     d = JOURNAL / datetime.now().strftime("%Y-%m-%d"); d.mkdir(parents=True, exist_ok=True)
     for n in range(1000):
         p = d / f"{time.time_ns() + n}-{os.getpid()}-{role}.md"
+        part = p.with_name(p.name + ".part")
         try:
-            with open(p, "x") as f: f.write("\n".join(lines) + "\n")
+            with open(part, "x") as f: f.write("\n".join(lines) + "\n")
+            os.link(part, p)
             return p
         except FileExistsError: continue
+        finally: part.unlink(missing_ok=True)
     raise RuntimeError("journal_write: could not allocate a unique filename")
 
 def ingest_journal(c):
@@ -1213,7 +1227,7 @@ def compile_(c):
     now = time.time(); rows.sort(key=lambda r: -score(r, now))
     by = {}
     for r in rows: by.setdefault(r["project"], []).append(r)
-    def fmt(r): return f"- ({r['votes']}) {r['text']}"
+    def fmt(r): return f"- ({r['votes']}) {compiled_text(r['text'])}"
     atomic_write(COMPILED / "PLAYBOOK.md", "\n".join(fmt(r) for r in by.get("all", [])[:CFG["max_lines"]]) + "\n")
     for proj, rs in by.items():
         if proj == "all": continue
@@ -1221,10 +1235,25 @@ def compile_(c):
         atomic_write(COMPILED / "projects" / f"{proj}.md", "\n".join(fmt(r) for r in rs[:CFG["max_lines"]]) + "\n")
     for p in (COMPILED / "projects").glob("*.md"):   # remove compiled files for projects with no active lessons
         if p.stem not in by: p.unlink()
-    if shutil.which("git") and (ROOT / ".git").exists():
-        subprocess.run(["git", "-C", str(ROOT), "add", "-A"], capture_output=True, check=False)
-        subprocess.run(["git", "-C", str(ROOT), "commit", "-qm", f"compile {NOW()}"], capture_output=True, check=False)
+    if shutil.which("git") and (ROOT / ".git").exists(): commit_store()
     return len(rows), n_pruned
+
+GIT_TIMEOUT = 60   # seconds: git runs under the lock, and a signing prompt or a stuck hook must not hold it for good
+
+def commit_store():
+    """One commit of what the store versions: its compiled files, journal, archive and .gitignore, and never the
+    database, which a store with no .gitignore would otherwise commit. A failure is logged: it used to be dropped, and a
+    store with no git identity went on staging for months without a single commit."""
+    def git_(*args): return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, check=False, timeout=GIT_TIMEOUT)
+    try:
+        paths = [x for x in (".gitignore", "archive", "compiled", "journal") if (ROOT / x).exists()]
+        add = git_("add", "-A", "--", *paths)
+        if add.returncode: return log(f"the store's `git add` failed: {(add.stderr or add.stdout).strip()[:200]}")
+        if git_("diff", "--cached", "--quiet").returncode:       # 1: something is staged
+            done = git_("commit", "-qm", f"compile {NOW()}")
+            if done.returncode: log(f"the store's `git commit` failed: {(done.stderr or done.stdout).strip()[:200]}")
+    except subprocess.TimeoutExpired:
+        log(f"the store's git took longer than {GIT_TIMEOUT} s, and was left")
 
 HANDLED = set()   # lessons this process has reconciled, or recorded a check as owed for
 
@@ -1335,8 +1364,13 @@ def cmd_remember(a):
     line, why = lesson_line(a.project, a.text)
     if why: sys.exit(f"memory: nothing was saved: {why}")
     p = journal_write([line], "manual")
-    with Lock(), db() as c:
-        new = ingest_journal(c); post_ingest(c, new); c.commit(); compile_(c); c.commit()
+    try:
+        with Lock(), db() as c:
+            new = ingest_journal(c); post_ingest(c, new); c.commit(); compile_(c); c.commit()
+    except LockBusy:
+        # Not an error: the lesson is in the journal, and the next ingest folds it in. Saying "try again" made a retry
+        # write a second file, and the lesson a second vote.
+        return log(f"remembered → {p.name}; the store is busy, so the next ingest folds it in. Do not run this again.")
     log(f"remembered → {p.name}")
 
 HOOK_HEAD = re.compile(r"^== (\d{4}-\d\d-\d\d)T\S+ (stop|session start)\b")

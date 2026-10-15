@@ -5,6 +5,7 @@
 [ -n "$MEMORY_REFLECT" ] && exit 0
 # shellcheck source=hooks/runner.sh
 . "$(dirname "$0")/runner.sh"
+mkdir -p "$HOME/memory"      # hooks installed before the store, or a store deleted: the log is opened below
 echo "== $(date -u +%FT%TZ) session start" >>"$HOME/memory/hook.log"
-$RUN ingest --wait 2 </dev/null >>"$HOME/memory/hook.log" 2>&1
+"${RUN[@]}" ingest --wait 2 </dev/null >>"$HOME/memory/hook.log" 2>&1
 exit 0

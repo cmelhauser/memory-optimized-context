@@ -31,7 +31,7 @@ stop_json() {  # cwd transcript lesson -> a Stop hook's JSON, with a LESSONS blo
   "$PY" -c 'import json, sys; print(json.dumps({"session_id": "e2e", "cwd": sys.argv[1], "transcript_path": sys.argv[2],
             "last_assistant_message": "Done.\n\nLESSONS:\n[all] " + sys.argv[3]}))' "$@"
 }
-new_home() { "$PY" "$E/fixture.py" "$1" && HOME=$1 "$REPO/tools/init_store.sh" >/dev/null; }
+new_home() { "$PY" "$E/fixture.py" "$1" && env -u MEMORY_ROOT HOME="$1" "$REPO/tools/init_store.sh" >/dev/null; }
 checkout() {  # dir [.env text]: hooks/ and bin/ copied, so the runner's choice never depends on this checkout's .env
   mkdir -p "$1/hooks" "$1/bin" && cp "$REPO"/hooks/*.sh "$1/hooks/" && cp "$REPO/bin/memory" "$1/bin/"
   if [ -n "${2:-}" ]; then printf '%s\n' "$2" > "$1/.env"; fi
@@ -61,7 +61,7 @@ fi
 
 echo "== 1. native, API key: the SDK, with the image's pins"
 H=$W/h1; new_home "$H"
-env -u MEMORY_RUNNER HOME="$H" ANTHROPIC_API_KEY=sk-ant-e2e-fake ANTHROPIC_BASE_URL="http://127.0.0.1:$PORT" MEMORY_LLM=auto \
+env -u MEMORY_RUNNER -u MEMORY_ROOT -u MEMORY_DB HOME="$H" ANTHROPIC_API_KEY=sk-ant-e2e-fake ANTHROPIC_BASE_URL="http://127.0.0.1:$PORT" MEMORY_LLM=auto \
   "$VENV/bin/python3" "$REPO/bin/memory" learn --all 2>&1 | tail -1
 store_checks native-sdk "$H" sdk "$W/api.log"
 check "native-sdk: every request carried the key" "! grep -v sk-ant-e2e-fake '$W/api.log' | grep -q ."
@@ -69,7 +69,7 @@ check "native-sdk: MCP over stdio lists the tools and recall reads the store" "H
 
 echo "== 2. native, no key: claude -p through the hooks, which choose native because .env has no key"
 H=$W/h2; new_home "$H"; checkout "$W/native"
-NATIVE=(env -u ANTHROPIC_API_KEY -u MEMORY_RUNNER HOME="$H" PATH="$E/bin:$PATH" E2E_CLI_LOG="$W/cli2.log")
+NATIVE=(env -u ANTHROPIC_API_KEY -u MEMORY_RUNNER -u MEMORY_ROOT -u MEMORY_DB HOME="$H" PATH="$E/bin:$PATH" E2E_CLI_LOG="$W/cli2.log")
 wt=("$H"/.claude/projects/*worktrees*/w.jsonl)
 stop_json "$H/GitHub/doc-ingestion/.claude/worktrees/fervent-fermat-15cf91" "${wt[0]}" "journaled through the native hook" \
   | "${NATIVE[@]}" bash "$W/native/hooks/journal.sh" main
@@ -85,7 +85,7 @@ store_checks native-cli "$H" cli "$W/cli2.log"
 
 echo "== 3. native, no key: a usage limit twice during the backfill, then a clean rerun"
 H=$W/h3; new_home "$H"
-LEARN=(env -u ANTHROPIC_API_KEY -u MEMORY_RUNNER HOME="$H" PATH="$E/bin:$PATH" E2E_CLI_LOG="$W/cli3.log" "$PY" "$REPO/bin/memory" learn --all)
+LEARN=(env -u ANTHROPIC_API_KEY -u MEMORY_RUNNER -u MEMORY_ROOT -u MEMORY_DB HOME="$H" PATH="$E/bin:$PATH" E2E_CLI_LOG="$W/cli3.log" "$PY" "$REPO/bin/memory" learn --all)
 out=$(E2E_FAIL_AFTER=2 "${LEARN[@]}" 2>&1); rc=$?
 [ "$rc" -ne 0 ] && grep -q 'stopped early' <<<"$out"; verdict "resume: a limit inside a transcript stops learn with an error" $?
 out=$(E2E_FAIL_ON="[documentation of" "${LEARN[@]}" 2>&1); rc=$?
@@ -120,10 +120,10 @@ else
   store_checks docker "$H" sdk "$W/api.log"
   wt=("$H"/.claude/projects/*worktrees*/w.jsonl)
   stop_json "$H/GitHub/doc-ingestion/.claude/worktrees/fervent-fermat-15cf91" "${wt[0]}" "journaled through the docker hook" \
-    | env -u MEMORY_RUNNER HOME="$H" bash "$W/docker/hooks/journal.sh" main
+    | env -u MEMORY_RUNNER -u MEMORY_ROOT -u MEMORY_DB HOME="$H" bash "$W/docker/hooks/journal.sh" main
   wait_for "$H/memory/hook.log" "hook main:"
   check "docker: a key in .env sent the Stop hook into the container; LESSONS compiled" "grep -q 'journaled through the docker hook' '$H/memory/compiled/PLAYBOOK.md'"
-  env -u MEMORY_RUNNER HOME="$H" bash "$W/docker/hooks/compile.sh" </dev/null
+  env -u MEMORY_RUNNER -u MEMORY_ROOT -u MEMORY_DB HOME="$H" bash "$W/docker/hooks/compile.sh" </dev/null
   check "docker: the SessionStart hook ran ingest in the container" "grep -q 'ingest:' '$H/memory/hook.log'"
   check "docker: MCP over HTTP lists the tools and recall reads the volume's database" "'$PY' '$E/mcp_http.py'"
 fi

@@ -7,6 +7,23 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+### Fixed
+
+- Reviews of the compile path and of the hooks found these, each reproduced. `clean_lesson` ran only when a lesson was
+  stored, so a row stored before it existed (the live store holds one over 500 characters) reached `compiled/` as
+  written: lessons are now cleaned where the file is written, and every `@path`, which Claude Code imports anywhere in
+  a line and not only at its start, is broken with a zero-width space. `LESSON_RE` took 14 s on a 40,000-space line
+  while holding the lock (a lazy `.+?` before `\s*$`) and is linear. A journal file was created empty and then
+  written, so an ingest in between could read it empty, mark it read and lose the lesson: it is written under a
+  `.part` name and hard-linked whole. A failed `git add` or `git commit` in the store was dropped, and a store with no
+  git identity staged for months without one commit: it is logged, git gets 60 s under the lock, and the commit
+  adds only the store's own folders, so a store with no `.gitignore` no longer commits `memory.db`. `memory remember`
+  on a busy store said to try again, which wrote a second file and a second vote: the lesson is saved and it says so.
+  A Stop hook before `~/memory` existed left its temp file, holding the transcript path and the last message, in
+  `/tmp`. A checkout path with a space or a quote broke both hooks: the command is an array now. An empty or quoted
+  `ANTHROPIC_API_KEY` in `.env`, or one ending in a carriage return, sent the hooks to a container that was not
+  there. `tools/e2e.sh` could write into the operator's own store if `MEMORY_ROOT` was exported. A new store is
+  created with mode 700; an existing one is left alone (`chmod 700 ~/memory` to match).
 ### Changed
 
 - The workflows are harder to abuse, from a supply-chain review. Every action is pinned to a commit rather than a

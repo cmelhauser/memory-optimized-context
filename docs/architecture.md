@@ -110,7 +110,8 @@ Embeddings are off by default. The corpus is dense with exact tokens (`maxconn`,
 
 ## Concurrency
 
-- **Journal:** one file per event, `open(path, "x")`, nanosecond stamp plus PID. Two events in
+- **Journal:** one file per event, written under a `.part` name and hard-linked to its own (`os.link` fails if the name
+  exists), so it appears whole; nanosecond stamp plus PID. Two events in
   one process in one tick still get two files; the test suite proves it.
 - **Lock:** `mkdir .lock` on the bind-mounted store, so host and container processes serialise
   against the same directory. Waits up to 20 s (2 s for the SessionStart hook's

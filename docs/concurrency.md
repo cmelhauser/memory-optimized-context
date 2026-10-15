@@ -5,7 +5,7 @@ proves each closure is named.
 
 | Race | Closed by | Test |
 |---|---|---|
-| Two hooks fire in the same tick | one journal file per event, exclusive create, ns stamp + PID | `test_journal_write_never_appends`, `test_parallel_hook_processes_do_not_lose_updates` |
+| Two hooks fire in the same tick | one journal file per event, hard-linked whole from a `.part` file (fails if the name exists), ns stamp + PID | `test_journal_write_never_appends`, `test_parallel_hook_processes_do_not_lose_updates` |
 | Two compiles at once | `mkdir .lock` is atomic; the loser waits, then proceeds | `test_lock_serialises_writers` |
 | A compile crashes holding the lock | a lock nobody has touched for 600 s is broken, under `.lock.break` so only one writer can do it, with the staleness checked again while holding that; a live holder touches it every 60 s | `test_stale_lock_is_broken`, `test_only_one_writer_breaks_a_crashed_holders_lock` |
 | The holder releases as a waiter checks the lock's age | a lock that vanishes mid-check means "try again", not an error at the waiter | `test_a_waiter_survives_the_lock_vanishing_between_its_mkdir_and_its_stat` |
