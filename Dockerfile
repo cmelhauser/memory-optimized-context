@@ -1,4 +1,4 @@
-FROM python:3.12.6-slim-bookworm
+FROM python:3.14.8-slim-bookworm
 # git settings go in /etc/gitconfig, not ~/.gitconfig: Compose sets HOME to the host's path.
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
