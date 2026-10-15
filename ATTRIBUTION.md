@@ -14,9 +14,9 @@ holder.
 
 The repository owner is the human author and legal rights contact for the original project
 material, reachable through the repository on GitHub. The original project material is
-dedicated to the public domain under The Unlicense.
-The project requests, but does not require, the courtesy credit above; see `LICENSE` for the
-dedication and its scope.
+released under the MIT License, from the version after 0.2.4; earlier versions were released
+under The Unlicense. The credit above is an acknowledgment, not a condition of either license;
+see `LICENSE`.
 
 ## Scope of this notice
 

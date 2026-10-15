@@ -7,6 +7,13 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+### Changed
+
+- The project is licensed under the MIT License, from the next release on, in place of The Unlicense. Versions up to
+  and including 0.2.4 were released under The Unlicense and stay so. `LICENSE`, `CITATION.cff`, `README.md` and
+  `ATTRIBUTION.md` say so. The courtesy credit the Unlicense text asked for is dropped from `LICENSE`; the
+  acknowledgment of the AI collaboration stays in `ATTRIBUTION.md`.
+
 ## [0.2.4] - 2026-10-14
 
 ### Added

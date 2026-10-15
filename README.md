@@ -6,7 +6,7 @@ Human Author: the repository owner
 AI Collaborator: theonlymuffinbot, using Anthropic Claude
 
 See [ATTRIBUTION.md](ATTRIBUTION.md) for the authorship and rights statement, and
-[LICENSE](LICENSE) for the public-domain dedication and courtesy-credit request.
+[LICENSE](LICENSE) for the MIT License.
 
 One Python file, two hook scripts. No server, no vector database, no scheduler. It captures
 durable lessons from every Claude Code session and subagent, from claude.ai, ChatGPT and Gemini
