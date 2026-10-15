@@ -9,6 +9,16 @@ until the system has run against a real store for at least a month.
 
 ### Changed
 
+- The workflows are harder to abuse, from a supply-chain review. Every action is pinned to a commit rather than a
+  tag. Only the release workflow's publish job holds `packages: write`; `verify`, which installs and runs third-party
+  tools, no longer does. A release now requires the tagged commit to be on `main`, and `:latest` moves only for a tag
+  with no `-` in it, so a pre-release such as `v0.3.0-rc1` no longer takes it. A `.dockerignore` keeps `.env` and the
+  local store out of the build context, `.gitignore` covers `.env.*`, and Compose runs the container with
+  `no-new-privileges` and every capability dropped.
+  `test_workflows_pin_actions_by_commit_and_only_the_publish_job_writes_packages`.
+
+### Changed
+
 - The project is licensed under the MIT License, from the next release on, in place of The Unlicense. Versions up to
   and including 0.2.4 were released under The Unlicense and stay so. `LICENSE`, `CITATION.cff`, `README.md` and
   `ATTRIBUTION.md` say so. The courtesy credit the Unlicense text asked for is dropped from `LICENSE`; the

@@ -3083,3 +3083,25 @@ def test_switching_branches_and_back_reads_no_commit_twice(m, tmp_path, monkeypa
         tips = m.cursor(c, f"repo:{repo.resolve()}:commits").split()
         assert len(tips) == 2                                                        # one per branch, neither containing the other
 
+
+# ------------------------------------------------------------------ what the workflows and the image may reach
+
+
+def test_the_build_context_is_exactly_what_the_dockerfile_copies():
+    """`.env` and the local store sit in the checkout; the image holds two files, and the context sent to the daemon should too."""
+    copied = [ln.split()[1] for ln in (REPO / "Dockerfile").read_text().splitlines() if ln.startswith("COPY ")]
+    ignore = (REPO / ".dockerignore").read_text().splitlines()
+    assert "*" in ignore and sorted(ln[1:] for ln in ignore if ln.startswith("!")) == sorted(copied)
+
+
+def test_workflows_pin_actions_by_commit_and_only_the_publish_job_writes_packages():
+    workflows = [(REPO / ".github" / "workflows" / n).read_text() for n in ("ci.yml", "release.yml")]
+    for text in workflows:
+        for ln in text.splitlines():
+            if "uses:" in ln: assert re.search(r"@[0-9a-f]{40}\b", ln), ln              # a tag can be moved; a commit cannot
+    release = workflows[1]
+    top, _, jobs = release.partition("\njobs:")
+    assert "packages: write" not in top and jobs.count("packages: write") == 1
+    publish = jobs.partition("publish:")[2]
+    assert "packages: write" in publish and "merge-base --is-ancestor" in jobs and "contains(github.ref_name, '-')" in release
+

@@ -27,6 +27,8 @@ services:
     ports:
       - "127.0.0.1:8765:8765"              # MCP over HTTP, host loopback only
     mem_limit: 256m
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]                        # a Python process that reads and writes files needs none
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket;socket.create_connection(('127.0.0.1',8765),3)"]
       interval: 60s

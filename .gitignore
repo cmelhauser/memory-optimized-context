@@ -10,6 +10,8 @@ memory.db*
 hook.log
 *.tmp
 .env
+.env.*
+!.env.example
 
 # Test and coverage artifacts. The suite and its configuration are tracked; what the runs
 # leave behind is not.

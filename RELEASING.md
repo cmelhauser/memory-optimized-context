@@ -58,7 +58,7 @@ this order:
 3. `CITATION.cff` `version:` equals the tag without the `v`.
 4. `CHANGELOG.md` has a `## [x.y.z]` section for it, and `[Unreleased]` is empty.
 
-Then tag. **Annotated, never lightweight**, because the message is where the state is recorded
+The tagged commit must be on `main`; the release workflow refuses a tag that is not. Then tag. **Annotated, never lightweight**, because the message is where the state is recorded
 and the release workflow rejects lightweight tags:
 
 ```bash
