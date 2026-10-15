@@ -7,6 +7,8 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-15
+
 ### Added
 
 - `.github/dependabot.yml`: a weekly pull request for the commit-pinned actions, the dev tools and the image's base,
