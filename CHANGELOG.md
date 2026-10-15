@@ -7,6 +7,8 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-14
+
 ### Added
 
 - Each `hook`, `ingest` and `learn` log line ends with the Reflector calls it made and the dollars `claude -p` reported
