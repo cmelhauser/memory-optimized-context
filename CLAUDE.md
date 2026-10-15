@@ -35,7 +35,8 @@ before editing either.
 - A superseded or archived lesson is absent from `compiled/` and from default search, and
   present in `search --all`.
 - No cursor moves past text the Reflector did not answer. A resumed `learn` sends each
-  transcript turn, commit and doc to the Reflector once, and counts a doc's tagged lines once.
+  transcript turn, commit and doc to the Reflector once, and counts a doc's tagged lines once, however the doc is
+  edited or the repository's branches are switched (the commit cursor is the tips read, one per branch).
   A run asks each new lesson's contradiction check at most once.
 - A Claude Code transcript's project is the `cwd` recorded in it, through `project_of()`, the
   same slug for the Stop hook and the backfill; a Claude Code worktree counts as its repository.
@@ -49,6 +50,8 @@ before editing either.
 - An adapter reads only files that are its root's own: not a symlink, not under one that leads out, at most
   2 MB (`inside()`), so a cloned repository cannot send `~/.ssh` to the Reflector. The HTTP MCP server accepts
   only a loopback `Host` and `Origin` (plus `--allowed-host`), whatever `--host` it listens on.
+- A `[proj] fact` line in a repository's own docs is a lesson only for that repository's slug; one for `all` or
+  another project is prose for the Reflector. In `--notes` it may name any project: they are the operator's own.
 - A writer that cannot get the lock raises `LockBusy`; the MCP tools answer "busy" and the
   server keeps running.
 - A lock holder touches `.lock` every 60 s, and only a lock untouched for 600 s is broken as a

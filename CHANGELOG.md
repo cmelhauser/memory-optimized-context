@@ -16,7 +16,20 @@ until the system has run against a real store for at least a month.
   and how the Stop and SessionStart hooks have done over the last seven days, from the dated `hook.log`. Read-only,
   so it answers during a long `learn`.
 
+### Changed
+
+- A `[proj] fact` line in a repository's docs goes into the store with no Reflector, so a cloned repository's
+  `[all] ...` line became a rule in the playbook every session imports. In a repository's docs a line is now a lesson
+  only for that repository's own slug; any other is prose for the Reflector to weigh. `--notes` is unchanged.
+
 ### Fixed
+
+- Editing a document that holds `[proj] fact` lines re-voted for every one of them; a line a document has already
+  given a vote to is counted once. The commit cursor was one hash, so reading a repository on one branch, another,
+  and the first again read the first's commits twice and double-voted them; it is now the tips read, one per branch.
+  A one-hash cursor from before is read as one tip. A document edited after upgrading may vote once more for its
+  lines, since nothing recorded which it had already counted.
+  `test_switching_branches_and_back_reads_no_commit_twice`, `test_editing_a_document_does_not_vote_again_for_the_lines_it_already_gave`.
 
 - A review of the adapters and the MCP server found these, each reproduced. A symlink in a cloned repository or a
   notes folder (`README.md -> ~/.ssh/...`, or a `docs` that leads out) made `learn --all`, which reads every clone,
@@ -33,6 +46,7 @@ until the system has run against a real store for at least a month.
   a very long query took minutes, `"cwd": 5` in a transcript raised, and a directory named `x.jsonl` raised.
   `test_a_symlink_cannot_make_an_adapter_read_outside_its_root`,
   `test_the_http_server_refuses_a_host_it_was_not_told_to_expect`.
+
 ## [0.2.3] - 2026-10-14
 
 ### Fixed

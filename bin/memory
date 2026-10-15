@@ -929,14 +929,15 @@ def pieces_of(text, size):
 
 TASK_ITEM = re.compile(r"[-*+]\s+\[[ xX]\]\s")   # `- [x] done` is a Markdown checklist, not a `[project]` tag
 
-def split_tagged(text):
+def split_tagged(text, allowed=None):
     """Lines of the form `[proj] fact` (optionally as a `- ` bullet) are lessons already; return them and the remaining prose.
-    A Markdown task-list item (`- [x] done`, `- [ ] todo`) is prose."""
+    A Markdown task-list item (`- [x] done`, `- [ ] todo`) is prose, and so is a line for a project not in `allowed`
+    (when there is one): it is text for the Reflector to weigh, not a lesson to take on a stranger's word."""
     tagged, rest = [], []
     for line in text.splitlines():
         s = line.strip()
         m = None if TASK_ITEM.match(s) else LESSON_RE.match(s.lstrip("-* ").strip())
-        if m: tagged.append((m.group(1), m.group(2)))
+        if m and (allowed is None or m.group(1).lower() in allowed): tagged.append((m.group(1), m.group(2)))
         else: rest.append(line)
     return tagged, ("\n".join(rest).strip() if any(line.strip() for line in rest) else "")
 
@@ -999,16 +1000,24 @@ def repo_slug(path):
     top = git(path, "rev-parse", "--show-toplevel").strip() or str(path)
     return slugify(Path(top).name)
 
-def take_docs(c, files, key_of, name_of):
+DOCIDS = "docids:"   # a `sources` key: the ids of the tagged lines a document has already given a vote
+
+def take_docs(c, files, key_of, name_of, allowed=None):
     """Upsert each changed file's `[proj] fact` lines now; return its prose for the Reflector and a callback that marks
     a file read once its prose is reflected. Until then its cursor is "tagged:<hash>": the tagged lines are in and only
-    the prose is owed, so a retry after a ReflectorFailed neither loses the prose nor counts a tagged line twice."""
+    the prose is owed, so a retry after a ReflectorFailed neither loses the prose nor counts a tagged line twice. Nor does
+    an edit: a document that changes is read again, and a line it already gave a vote to is not voted for a second time.
+    `allowed` limits which projects its tagged lines may name."""
     new, prose, pending = [], [], {}
     for f in files:
         text = f.read_text(errors="ignore"); key = key_of(f); h = sha(text); cur = cursor(c, key)
         if cur == h: continue
-        tagged, rest = split_tagged(text)
-        if cur != f"tagged:{h}": new += [upsert(c, pr, t) for pr, t in tagged]
+        tagged, rest = split_tagged(text, allowed)
+        if cur != f"tagged:{h}":
+            counted = set((cursor(c, DOCIDS + key) or "").split(","))
+            fresh = [(pr, t) for pr, t in tagged if lid(pr.lower(), clean_lesson(t)) not in counted]
+            new += [upsert(c, pr, t) for pr, t in fresh]
+            set_cursor(c, DOCIDS + key, ",".join(sorted(counted | {lid(pr.lower(), clean_lesson(t)) for pr, t in tagged} - {""})))
         set_cursor(c, key, f"tagged:{h}" if rest else h)
         parts = pieces_of(rest, DOC_MAX_CHARS)
         for i, part in enumerate(parts, 1):
@@ -1026,20 +1035,24 @@ def learn_repo(c, path, since=None):
     with carrying(new):
         head = git(path, "rev-parse", "HEAD").strip()
         if head:
-            key = f"repo:{path}:commits"; last = cursor(c, key)
-            rng = f"{last}..HEAD" if last and git_ok(path, "cat-file", "-e", last) else "HEAD"   # a rewritten history falls back to full
-            args = ["log", rng, "--no-merges", "--format=%x1e%H %ad %s%n%b", "--date=short", "--reverse"]  # \x1e opens each commit; %H never goes ambiguous
-            if since and not last: args.append(f"--since={since}")
+            # The cursor is the tips already read, one per branch visited: `HEAD --not <tips>` is the commits no
+            # branch read has reached, so switching branches and back reads nothing twice. A tip a rewrite removed drops out.
+            key = f"repo:{path}:commits"
+            tips = [h for h in (cursor(c, key) or "").split() if git_ok(path, "cat-file", "-e", h)]
+            args = ["log", "HEAD", *(["--not", *tips] if tips else []), "--no-merges", "--format=%x1e%H %ad %s%n%b", "--date=short", "--reverse"]
+            if since and not tips: args.append(f"--since={since}")   # \x1e opens each commit; %H never goes ambiguous
             commits = [e.strip() for e in git(path, *args).split("\x1e") if e.strip()]   # a body's blank lines stay in its commit
-            if commits and head != last:   # one chunk per commit, so a long history is windowed, not truncated
+            if commits and head not in tips:   # one chunk per commit, so a long history is windowed, not truncated
                 new += checkpoint(c, reflect_batches(c, [(f"commit {e.split()[0]}", e) for e in commits], project,
                                                      f"git history of {project}",
-                                                     done=lambda name: set_cursor(c, key, name.split()[1])))
-            set_cursor(c, key, head)
+                                                     done=lambda name: set_cursor(c, key, " ".join(dict.fromkeys([*tips, name.split()[1]])))))
+            kept = [h for h in tips if h != head and not git_ok(path, "merge-base", "--is-ancestor", h, head)]   # one a newer tip contains is redundant
+            set_cursor(c, key, " ".join([*kept[-9:], head]))
         files = []
         for g in DOC_GLOBS:   # README.md matches two globs; each file is read once
             files += [f for f in sorted(path.glob(g)) if f not in files and ".git" not in f.parts and inside(f, path)]
-        got, docs, done = take_docs(c, files, lambda f: f"repo:{path}:doc:{f.relative_to(path)}", lambda f: str(f.relative_to(path)))
+        got, docs, done = take_docs(c, files, lambda f: f"repo:{path}:doc:{f.relative_to(path)}", lambda f: str(f.relative_to(path)),
+                                    allowed={project})   # a cloned repository's `[all]` line is not the operator's word
         new += checkpoint(c, got)
         if docs: new += checkpoint(c, reflect_batches(c, docs, project, f"documentation of {project}", done))
     return new
