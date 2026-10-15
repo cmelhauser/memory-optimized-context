@@ -68,7 +68,8 @@ git push origin v0.1.0
 
 Pushing a tag runs `.github/workflows/release.yml`, which re-runs lint and the full test matrix,
 checks the tag against `CITATION.cff` and `CHANGELOG.md`, and then builds and pushes the
-multi-architecture image to `ghcr.io/cmelhauser/memory-optimized-context`. It cannot make a bad
+multi-architecture image to `ghcr.io/cmelhauser/memory-optimized-context`, with an SBOM and build provenance
+attached to it as BuildKit attestations (unsigned). It cannot make a bad
 tag good, but it records publicly whether the claim held.
 
 ---

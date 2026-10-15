@@ -109,5 +109,10 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:${{ github.ref_name }}
             ${{ !contains(github.ref_name, '-') && format('ghcr.io/{0}:latest', github.repository) || '' }}
+          # Attached to the image in the registry as attestations: the packages inside it, and how and from what it was
+          # built. They are BuildKit's own and unsigned; `docker buildx imagetools inspect <image> --format
+          # '{{ json .SBOM }}'` reads the first.
+          sbom: true
+          provenance: mode=max
           cache-from: type=gha
           cache-to: type=gha,mode=max

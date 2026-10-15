@@ -7,6 +7,12 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+### Added
+
+- The published image carries an SBOM and build provenance (`mode=max`) as BuildKit attestations. They are unsigned: signing
+  them would need a keyless identity the workflow does not have yet. The release workflow cannot be run without a tag,
+  so the first tag after this change is its test.
+
 ### Changed
 
 - Everything that is installed is now pinned exactly, with hashes, and installed checking them. The image's base is named

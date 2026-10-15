@@ -3104,6 +3104,7 @@ def test_workflows_pin_actions_by_commit_and_only_the_publish_job_writes_package
     assert "packages: write" not in top and jobs.count("packages: write") == 1
     publish = jobs.partition("publish:")[2]
     assert "packages: write" in publish and "merge-base --is-ancestor" in jobs and "contains(github.ref_name, '-')" in release
+    assert "sbom: true" in publish and "provenance: mode=max" in publish                   # what is in the image, and how it was built
 
 
 # ------------------------------------------------------------------ the compile and hook scripts, as a review left them
