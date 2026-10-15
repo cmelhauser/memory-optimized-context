@@ -55,8 +55,8 @@ cleanup() {
 trap cleanup EXIT
 for _ in $(seq 1 50); do "$PY" -c "import socket; socket.create_connection(('127.0.0.1', $PORT), 1)" 2>/dev/null && break; sleep 0.1; done
 if [ ! -x "$VENV/bin/python3" ]; then
-  read -r -a pins <<<"$(grep -oE '(anthropic|mcp)==[0-9.]+' "$REPO/Dockerfile" | tr '\n' ' ')"   # the image's anthropic and mcp pins
-  if ! { "$PY" -m venv "$VENV" && "$VENV/bin/pip" install -q "${pins[@]}"; }; then echo "FAIL could not build the venv"; exit 1; fi
+  # the image's own packages, as the image installs them: exact versions, hashes checked
+  if ! { "$PY" -m venv "$VENV" && "$VENV/bin/pip" install -q --require-hashes -r "$REPO/requirements-runtime.txt"; }; then echo "FAIL could not build the venv"; exit 1; fi
 fi
 
 echo "== 1. native, API key: the SDK, with the image's pins"
@@ -108,7 +108,8 @@ else
   H=$W/h4; new_home "$H"
   env_text=$(printf 'ANTHROPIC_API_KEY=sk-ant-e2e-fake\nANTHROPIC_BASE_URL=http://host.docker.internal:%s\nMEMORY_LLM=sdk' "$PORT")
   mkdir -p "$W/compose/tools"
-  cp "$REPO/Dockerfile" "$W/compose/" && cp -R "$REPO/bin" "$W/compose/" && cp "$REPO/tools/eval_recall.py" "$W/compose/tools/"
+  cp "$REPO/Dockerfile" "$REPO/.dockerignore" "$REPO/requirements-runtime.txt" "$W/compose/" && cp -R "$REPO/bin" "$W/compose/" \
+    && cp "$REPO/tools/eval_recall.py" "$W/compose/tools/"      # exactly the Dockerfile's COPY sources, under the real ignore rules
   sed 's/^\([[:space:]]*image:\).*/\1 memory-optimized-context:e2e/' "$REPO/docker-compose.yml" > "$W/compose/docker-compose.yml"
   printf '%s\n' "$env_text" > "$W/compose/.env"; checkout "$W/docker" "$env_text"
   "${DC[@]}" up -d --build 2>&1 | tail -2

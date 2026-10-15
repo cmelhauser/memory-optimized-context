@@ -3266,8 +3266,27 @@ def test_a_compile_that_changes_nothing_makes_no_commit(tmp_path, monkeypatch):
     assert len(log) == 1
 
 
-def test_dependabot_watches_the_actions_and_the_image_by_patch():
+def test_dependabot_watches_the_actions_the_packages_and_the_image_by_patch():
     text = (REPO / ".github" / "dependabot.yml").read_text()
-    assert all(f"package-ecosystem: {e}" in text for e in ("github-actions", "docker")) and "interval: weekly" in text
+    assert all(f"package-ecosystem: {e}" in text for e in ("github-actions", "pip", "docker")) and "interval: weekly" in text
     assert "semver-minor" in text and "semver-major" in text                      # the base image moves by patch only
+
+
+
+
+def test_every_python_package_and_the_base_image_are_pinned_with_hashes_and_installed_checking_them():
+    """A tag moves and a floor drifts; a digest and a hash do not. The image, CI and the release install only what the
+    lock files name, and pip refuses anything whose hash differs."""
+    for lock in ("requirements-runtime.txt", "requirements-dev.txt"):
+        entries = re.split(r"(?m)^(?=[A-Za-z0-9_.-]+==)", (REPO / lock).read_text())[1:]
+        assert entries and all("--hash=sha256:" in e for e in entries), lock                 # each exact pin carries its hashes
+    runtime = (REPO / "requirements-runtime.txt").read_text()
+    assert all(re.search(rf"(?m)^{p}==", runtime) for p in ("anthropic", "mcp", "numpy"))
+    docker = (REPO / "Dockerfile").read_text()
+    assert re.search(r"(?m)^FROM python:3\.12\.\d+-slim-bookworm@sha256:[0-9a-f]{64}$", docker)
+    assert "--require-hashes -r /tmp/requirements-runtime.txt" in docker
+    for flow in ("ci.yml", "release.yml"):
+        text = (REPO / ".github" / "workflows" / flow).read_text()
+        installs = [ln for ln in text.splitlines() if "pip install" in ln]
+        assert installs and all("--require-hashes" in ln for ln in installs), flow
 

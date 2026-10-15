@@ -1,4 +1,5 @@
 # The image holds two files. Everything else, .env and the local store included, stays out of the build context.
 *
 !bin/memory
+!requirements-runtime.txt
 !tools/eval_recall.py

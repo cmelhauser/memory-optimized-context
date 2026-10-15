@@ -9,6 +9,14 @@ until the system has run against a real store for at least a month.
 
 ### Changed
 
+- Everything that is installed is now pinned exactly, with hashes, and installed checking them. The image's base is named
+  by digest (`python:3.12.15-slim-bookworm@sha256:...`, the index, so arm64 and amd64 both resolve) and its Python
+  packages by `requirements-runtime.txt`, which pip installs with `--require-hashes`; CI, the release workflow and
+  `tools/e2e.sh` do the same with `requirements-dev.txt`, which was a list of floors and is now `requirements-dev.in`
+  resolved by `uv pip compile` to one lock that holds for every Python from 3.10. The suite thereby runs against the
+  `mcp` the image ships. The release workflow no longer upgrades pip unpinned. Dependabot watches the lock files again
+  and the base image by patch. `test_every_python_package_and_the_base_image_are_pinned_with_hashes_and_installed_checking_them`.
+
 - Dependabot no longer watches `requirements-dev.txt`, whose floors CI does not honour, so its first five pull requests
   changed nothing but that file, and it moves the image's base by patch only: its first docker pull request was a
   jump to Python 3.14, which CI does not cover. Both are closed with a reason. Its pull request for the six pinned

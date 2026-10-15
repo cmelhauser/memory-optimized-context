@@ -15,7 +15,7 @@ reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.2.5`. 215 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.2.5`. 216 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. It has run natively against a real store
@@ -56,7 +56,7 @@ carry `memory.db` across when you switch.
 git clone https://github.com/cmelhauser/memory-optimized-context ~/GitHub/memory-optimized-context
 cd ~/GitHub/memory-optimized-context
 tools/init_store.sh                          # creates ~/memory with its own .git
-python3 -m venv .venv && .venv/bin/pip install anthropic==1.5.0 mcp==2.2.0   # MCP server + SDK, the image's pins
+python3 -m venv .venv && .venv/bin/pip install --require-hashes -r requirements-runtime.txt   # MCP server + SDK, the image's pins
 .venv/bin/python3 bin/memory compile
 ```
 
@@ -348,7 +348,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       215 tests, six-process concurrency test included
+tests/test_memory.py       216 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, install_nightly.sh, nightly_catchup.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
@@ -361,7 +361,8 @@ Dockerfile, docker-compose.yml, .env.example
 ## Development
 
 ```bash
-python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements-dev.txt
+python3 -m venv .venv && . .venv/bin/activate && pip install --require-hashes -r requirements-dev.txt
+# requirements-dev.txt and requirements-runtime.txt are generated, with hashes, from their .in files (see each header)
 tools/run_ci_locally.sh            # ruff, actionlint, shellcheck, docs, tests at 100 per cent coverage
 tools/run_ci_locally.sh --image    # plus the container build
 tools/e2e.sh                       # both installs end to end against fakes; --no-docker for native only

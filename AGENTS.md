@@ -11,7 +11,7 @@ library only) owns a SQLite store, an append-only journal, a locked compiler, a 
 calls Claude to extract lessons from transcripts, commits, docs and chat exports, a
 contradiction check, a pruner, hybrid search, and an MCP server. Two shell hooks, sharing `hooks/runner.sh`, connect it to Claude
 Code. It runs natively by default, reflecting through `claude -p`; a Dockerfile and Compose file
-run it in a container when an API key is configured. Two hundred and fifteen tests cover it
+run it in a container when an API key is configured. Two hundred and sixteen tests cover it
 at 100 per cent of lines and branches, including a six-process concurrency test, and
 `tools/e2e.sh` runs both installs end to end against a fake Reflector.
 
@@ -67,7 +67,7 @@ Anthropic Claude. See `ATTRIBUTION.md` and `LICENSE`.
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install --require-hashes -r requirements-dev.txt
 tools/run_ci_locally.sh
 tools/e2e.sh            # after a change to the hooks, the Dockerfile, the Compose file or the Reflector
 ```
