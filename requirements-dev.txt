@@ -10,7 +10,7 @@ coverage>=7.4
 # is unlikely to start failing the build on style.
 ruff>=0.6
 # Shell lint for hooks/*.sh and tools/*.sh. The wheel bundles the shellcheck binary.
-shellcheck-py>=0.10
+shellcheck-py>=0.11.0.1
 # Optional at runtime, required by the MCP server test.
 mcp>=1.13
 # Optional at runtime (the image pins it); here so the suite tests vector_rank's numpy path.
