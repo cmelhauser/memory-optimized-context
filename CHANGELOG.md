@@ -15,6 +15,10 @@ until the system has run against a real store for at least a month.
 
 ### Changed
 
+- `mcp` is 2.3.0 and the image's `numpy` 2.5.4. Dependabot's pull request for them regenerated the lock files without
+  `--universal`, which dropped the environment markers (`numpy` 2.5.4 for every Python, `colorama`, `exceptiongroup`
+  and `tomli` gone), so it failed on 3.10; it is closed, and the locks are compiled by hand as their headers say.
+
 - Everything that is installed is now pinned exactly, with hashes, and installed checking them. The image's base is named
   by digest (`python:3.12.15-slim-bookworm@sha256:...`, the index, so arm64 and amd64 both resolve) and its Python
   packages by `requirements-runtime.txt`, which pip installs with `--require-hashes`; CI, the release workflow and

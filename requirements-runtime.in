@@ -1,4 +1,4 @@
 # The runtime pins of the container image. Edit here, then regenerate requirements-runtime.txt (see its header).
 anthropic==1.5.0
-mcp==2.2.0
-numpy==2.4.4
+mcp==2.3.0
+numpy==2.5.4
