@@ -38,11 +38,13 @@ Semantic versioning, with the three levels mapped to what can actually change he
 **PATCH** — corrections, tooling, lint, documentation. Nothing a user would notice except that a
 bug is gone.
 
-### Why this is pre-1.0
+### What 1.0.0 means
 
-It has run against a real store since 15 September 2026; the month is up, but whether it has earned 1.0.0 is the
-owner's decision. The scoring constants, the 150-line cap and the contradiction prompt are what the first month
-chose. 1.0.0 means a month of real use has not required a `store/` branch.
+It ran against a real store from 15 September 2026, and in that month nothing required a `store/` branch: the store
+schema, `lid()` and the journal line format are those of 0.1.0. 1.0.0 is the owner's declaration that they are stable.
+From it, any change to them is a MAJOR release with a migration (see the synchronisation rule in `CLAUDE.md`). It does
+not say the tuning is final: the scoring constants, the 150-line cap and the contradiction prompt are what the first
+month chose, and changing them is a MINOR or PATCH release, since no existing store needs migrating.
 
 ---
 
