@@ -11,6 +11,7 @@ the journal line format stable.
 
 - `SECURITY.md` (what is in scope, and GitHub's private vulnerability reporting as the way to report), a bug-report form
   that asks for invented text rather than a memory store, and a pull request checklist that repeats the privacy rules.
+- `CODE_OF_CONDUCT.md`, the Contributor Covenant 2.1, with GitHub's private reporting form as the way to report.
 
 ### Changed
 
@@ -20,6 +21,10 @@ the journal line format stable.
 - `LICENSE` is the standard MIT text alone, so GitHub recognises it. The note that versions up to 0.2.4 are under the
   Unlicense lives in `ATTRIBUTION.md`, where it already was.
   `test_the_license_is_the_plain_mit_text_and_the_repository_says_how_to_report_a_vulnerability`.
+
+- Four timing bounds in the tests (the lock's break, its heartbeat, `ingest --wait` and the `LESSON_RE` line) are
+  generous enough that a machine under heavy load no longer fails them; one did, at a load average of 46. Each still
+  fails on the bug it guards against.
 
 ## [1.0.0] - 2026-10-16
 

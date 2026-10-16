@@ -151,7 +151,7 @@ def test_a_live_holder_keeps_its_lock_fresh(m, monkeypatch):
     with m.Lock():
         os.utime(m.LOCK, (old, old))          # as if the holder had worked for 700 s without a beat
         time.sleep(0.2)
-        assert time.time() - m.LOCK.stat().st_mtime < 5
+        assert time.time() - m.LOCK.stat().st_mtime < 60                   # beaten, not still 700 s old; a loaded machine is slow
         with pytest.raises(m.LockBusy), m.Lock(wait=0.3):
             pass
         assert m.LOCK.exists()
@@ -1098,7 +1098,7 @@ def test_ingest_wait_bounds_how_long_session_start_can_block(m):
     started = time.time()
     with pytest.raises(m.LockBusy):
         m.main()
-    assert time.time() - started < 2
+    assert time.time() - started < 10                                         # it gave up after 0.2 s, not after a hung wait
 
 
 # ------------------------------------------------------------------ MCP layer, against a stand-in mcp package
@@ -2585,9 +2585,9 @@ def test_a_break_lock_a_dead_writer_left_does_not_stop_every_writer_for_good(m):
     m.BREAK.mkdir()
     os.utime(m.BREAK, (time.time() - 3600,) * 2)                             # and so did the one breaking it
     started = time.time()
-    with m.Lock(wait=3) as lk:
+    with m.Lock(wait=30) as lk:                                              # long enough that a loaded machine still gets there
         assert lk.mine() and not m.BREAK.exists()
-    assert time.time() - started < 2
+    assert time.time() - started < 25                                        # it broke both and took the lock; it did not run out the wait
 
 
 # ------------------------------------------------------------------ a cursor inside a long turn
@@ -3148,7 +3148,7 @@ def test_old_rows_and_inline_imports_are_cleaned_where_the_compiled_file_is_writ
 def test_a_lesson_line_with_a_long_run_of_spaces_is_read_in_linear_time(m):
     started = time.time()
     assert m.LESSON_RE.match("[a] x" + " " * 200_000 + "y") and m.LESSON_RE.match("[a]" + " " * 200_000 + "y")
-    assert m.LESSON_RE.match("[a] " + " " * 200_000) is None and time.time() - started < 2     # was 14 s at 40,000
+    assert m.LESSON_RE.match("[a] " + " " * 200_000) is None and time.time() - started < 10    # was 14 s at 40,000
 
 
 def test_a_journal_file_appears_whole_or_not_at_all(m):

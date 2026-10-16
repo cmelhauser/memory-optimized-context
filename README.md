@@ -362,7 +362,7 @@ docs/diagrams/             the original sketch and four drafts, ending at 04-as-
 Dockerfile, docker-compose.yml, .env.example, .dockerignore
 requirements-*.in/.txt     the pins: the image's runtime packages and the dev tools, hashed (see the header of each .txt)
 .github/                   the CI and release workflows, Dependabot's config, issue and pull request templates
-AGENTS.md, CLAUDE.md, CONTRIBUTING.md, SECURITY.md, RELEASING.md, CHANGELOG.md, CITATION.cff, LICENSE, ATTRIBUTION.md
+AGENTS.md, CLAUDE.md, CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, RELEASING.md, CHANGELOG.md, CITATION.cff, LICENSE, ATTRIBUTION.md
 ```
 
 ## Development
