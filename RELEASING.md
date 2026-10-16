@@ -40,10 +40,9 @@ bug is gone.
 
 ### Why this is pre-1.0
 
-It has run against a real store since 15 September 2026, but not yet for a month. Until it
-has, the scoring constants, the
-150-line cap and the contradiction prompt are guesses. 1.0.0 means a month of real use has not
-required a `store/` branch.
+It has run against a real store since 15 September 2026; the month is up, but whether it has earned 1.0.0 is the
+owner's decision. The scoring constants, the 150-line cap and the contradiction prompt are what the first month
+chose. 1.0.0 means a month of real use has not required a `store/` branch.
 
 ---
 

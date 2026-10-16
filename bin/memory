@@ -1396,14 +1396,16 @@ def hook_health(path, days=7):
 def cmd_status(a):
     """What the store holds, what it owes, and how the nightly job and the hooks have done. Read-only: it takes no lock,
     so it answers during a long `learn`."""
-    with db() as c:
-        states = dict(c.execute("SELECT state, count(*) FROM lessons GROUP BY 1").fetchall())
-        projects = c.execute("SELECT count(DISTINCT project) FROM lessons WHERE state='active'").fetchone()[0]
-        owed = c.execute("SELECT count(*) FROM sources WHERE key LIKE ?", (RECHECK + "%",)).fetchone()[0]
-        helpful = c.execute("SELECT count(*) FROM lessons WHERE helpful>0").fetchone()[0]
+    states, projects, owed, helpful = {}, 0, 0, 0
+    if DB.exists():                           # connect() would create an empty store where there is none
+        with db() as c:
+            states = dict(c.execute("SELECT state, count(*) FROM lessons GROUP BY 1").fetchall())
+            projects = c.execute("SELECT count(DISTINCT project) FROM lessons WHERE state='active'").fetchone()[0]
+            owed = c.execute("SELECT count(*) FROM sources WHERE key LIKE ?", (RECHECK + "%",)).fetchone()[0]
+            helpful = c.execute("SELECT count(*) FROM lessons WHERE helpful>0").fetchone()[0]
     print(f"store      {ROOT}: {states.get('active', 0)} active lessons in {projects} projects "
           f"({states.get('archived', 0)} archived, {states.get('merged', 0)} merged, {states.get('superseded', 0)} superseded), "
-          f"{DB.stat().st_size // 1024 // 1024} MB, {helpful} marked helpful")
+          f"{DB.stat().st_size // 1024 // 1024 if DB.exists() else 0} MB, {helpful} marked helpful")
     print(f"owed       {owed} contradiction check(s)" + (": the next `learn` pays them" if owed else ""))
     print("lock       " + ("held: a `learn` or a hook is writing" if LOCK.exists() else "free"))
     state = Path(os.environ.get("MEMORY_STATE_DIR") or Path.home() / ".local" / "share" / "memory-optimized-context")
