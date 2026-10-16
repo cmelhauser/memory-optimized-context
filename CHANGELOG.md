@@ -7,6 +7,17 @@ the journal line format stable.
 
 ## [Unreleased]
 
+### Added
+
+- `SECURITY.md` (what is in scope, and GitHub's private vulnerability reporting as the way to report), a bug-report form
+  that asks for invented text rather than a memory store, and a pull request checklist that repeats the privacy rules.
+
+### Changed
+
+- `LICENSE` is the standard MIT text alone, so GitHub recognises it. The note that versions up to 0.2.4 are under the
+  Unlicense lives in `ATTRIBUTION.md`, where it already was.
+  `test_the_license_is_the_plain_mit_text_and_the_repository_says_how_to_report_a_vulnerability`.
+
 ## [1.0.0] - 2026-10-16
 
 The system ran against a real store for the month from 15 September 2026 without its schema, `lid()` or journal line

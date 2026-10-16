@@ -3279,6 +3279,14 @@ def test_a_compile_that_changes_nothing_makes_no_commit(tmp_path, monkeypatch):
     assert len(log) == 1
 
 
+def test_the_license_is_the_plain_mit_text_and_the_repository_says_how_to_report_a_vulnerability():
+    lic = (REPO / "LICENSE").read_text()
+    assert lic.startswith("MIT License\n") and lic.rstrip().endswith("SOFTWARE.") and "Unlicense" not in lic
+    assert "Unlicense" in (REPO / "ATTRIBUTION.md").read_text()                 # the history of the earlier versions is kept
+    assert "private vulnerability reporting" in (REPO / "SECURITY.md").read_text()
+    assert (REPO / ".github" / "PULL_REQUEST_TEMPLATE.md").exists() and (REPO / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml").exists()
+
+
 def test_dependabot_watches_the_actions_and_the_image_by_patch_and_leaves_the_universal_locks_to_a_person():
     text = (REPO / ".github" / "dependabot.yml").read_text()
     assert all(f"package-ecosystem: {e}" in text for e in ("github-actions", "docker")) and "interval: weekly" in text
