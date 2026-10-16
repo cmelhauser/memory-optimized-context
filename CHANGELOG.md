@@ -15,6 +15,12 @@ until the system has run against a real store for at least a month.
 
 ### Changed
 
+- Dependabot no longer watches the Python lock files. Its pip updater regenerates them without `--universal`, which
+  drops the environment markers: its pull request failed the Python 3.10 job, GitHub emailed a failed run, and it
+  would have reopened every week. The locks are refreshed by hand as the first step of a release (`RELEASING.md`).
+  Actions and the image's base stay watched.
+  `test_dependabot_watches_the_actions_and_the_image_by_patch_and_leaves_the_universal_locks_to_a_person`.
+
 - `mcp` is 2.3.0 and the image's `numpy` 2.5.4. Dependabot's pull request for them regenerated the lock files without
   `--universal`, which dropped the environment markers (`numpy` 2.5.4 for every Python, `colorama`, `exceptiongroup`
   and `tomli` gone), so it failed on 3.10; it is closed, and the locks are compiled by hand as their headers say.

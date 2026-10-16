@@ -1,7 +1,9 @@
-# Weekly updates for what the pins would otherwise leave to age: the commit-pinned actions, the hashed Python packages
-# (the dev tools and the image's runtime) and the image's base. Each arrives as a pull request, and CI is the verdict
-# on it like any other. A pip pull request changes requirements-*.txt only; its `.in` input is edited by hand
-# (see the header of each lock file).
+# Weekly updates for what the pins would otherwise leave to age: the commit-pinned actions and the image's base. Each
+# arrives as a pull request, and CI is the verdict on it like any other.
+#
+# The hashed Python lock files are not here on purpose. They are compiled by `uv pip compile --universal`, with
+# environment markers for every Python from 3.10; Dependabot's pip updater regenerates them without the markers, so its
+# pull request fails on 3.10 and would reopen every week. They are refreshed by hand: RELEASING.md, first step.
 #
 # The base image moves by patch only: CI covers Python 3.10 to 3.13 and the image targets 3.12, so a jump to another
 # minor is for a person.
@@ -13,14 +15,6 @@ updates:
       interval: weekly
     groups:
       actions:
-        patterns: ["*"]
-  - package-ecosystem: pip
-    directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 3
-    groups:
-      python-packages:
         patterns: ["*"]
   - package-ecosystem: docker
     directory: /
