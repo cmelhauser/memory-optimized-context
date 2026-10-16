@@ -2,10 +2,16 @@
 
 Versioning is explained in `RELEASING.md`. In short: MAJOR means the store schema or the
 journal line format changed in a way an existing `~/memory` cannot survive without migration,
-MINOR means a new capability or adapter, PATCH means corrections and tooling. It stays below 1.0
-until the system has run against a real store for at least a month.
+MINOR means a new capability or adapter, PATCH means corrections and tooling. 1.0.0 declares the schema, `lid()` and
+the journal line format stable.
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-10-16
+
+The system ran against a real store for the month from 15 September 2026 without its schema, `lid()` or journal line
+format changing from 0.1.0's, so an existing `~/memory` needs no migration, and 1.0.0 declares them stable: a change to
+any of them is a MAJOR release with a migration from now on. Nothing else differs from 0.2.6 but the release workflow.
 
 ### Changed
 
