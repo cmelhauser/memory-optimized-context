@@ -2445,6 +2445,13 @@ def fake_memory(tmp_path, rc, lines=(), lock_held_first=False):
 
 
 def run_nightly(tmp_path, fake, **extra):
+    # The script looks in $HOME/.local/bin first, so a stand-in osascript there keeps a run that alerts on purpose from
+    # showing a real notification; a test that wants to see the call writes its own stand-in before this runs.
+    stub = tmp_path / ".local" / "bin" / "osascript"
+    if not stub.exists():
+        stub.parent.mkdir(parents=True, exist_ok=True)
+        stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
     state = tmp_path / "state"
     env = {**os.environ, "HOME": str(tmp_path), "MEMORY_PYTHON": str(fake), "MEMORY_STATE_DIR": str(state), "RETRY_WAIT": "0", **extra}
     r = subprocess.run(["bash", str(REPO / "tools" / "nightly_catchup.sh")], env=env, capture_output=True, text=True, timeout=30, check=False)

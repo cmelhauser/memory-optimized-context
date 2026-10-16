@@ -14,6 +14,9 @@ the journal line format stable.
 
 ### Changed
 
+- The nightly catch-up tests no longer show real macOS notifications. The runs that alert on purpose found the real
+  `osascript`, so each run of the suite posted "The catch-up did not run as it should" to the desktop; `run_nightly`
+  now puts a stand-in `osascript` under the test's `$HOME`.
 - `LICENSE` is the standard MIT text alone, so GitHub recognises it. The note that versions up to 0.2.4 are under the
   Unlicense lives in `ATTRIBUTION.md`, where it already was.
   `test_the_license_is_the_plain_mit_text_and_the_repository_says_how_to_report_a_vulnerability`.
