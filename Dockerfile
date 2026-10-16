@@ -12,8 +12,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 COPY bin/memory /app/memory
 COPY tools/eval_recall.py /app/eval_recall.py
 RUN chmod +x /app/memory
+# Not root. /data is created before VOLUME so a new named volume takes its ownership, and it is writable by any user so
+# `user:` in docker-compose.yml can name the host's uid on Linux, where a bind mount keeps real ownership.
+RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin memory \
+ && mkdir /data && chown memory /data && chmod 1777 /data
 ENV MEMORY_DB=/data/memory.db PYTHONUNBUFFERED=1
 VOLUME /data
+USER 10001
 EXPOSE 8765
 ENTRYPOINT ["python3", "/app/memory"]
 # The container listens beyond itself; Compose publishes it on the host's loopback only. Nothing may follow the

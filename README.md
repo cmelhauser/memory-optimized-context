@@ -15,7 +15,7 @@ reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v1.0.0`. 218 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v1.0.0`. 219 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. It has run natively against a real store
@@ -87,8 +87,11 @@ What runs where:
 
 Paths are mounted at identical locations inside the container and the container's `HOME` is
 your host `HOME`, so `transcript_path` from hook JSON needs no translation and `learn --all`
-finds `~/.claude/projects` and `~/GitHub`. The container runs as root per your Docker ground
-rules (no `--user`); Docker Desktop maps written files to your host user.
+finds `~/.claude/projects` and `~/GitHub`. The container runs as an unprivileged user (uid 10001), with every
+capability dropped. Docker Desktop on macOS maps the files it writes to your host user; on Linux, set `MEMORY_UID` and
+`MEMORY_GID` in `.env` to your own (`id -u`, `id -g`) so it can write `~/memory`. A `memory-db` volume made by a release
+up to 1.0.0, when the container ran as root, is owned by root: give it to the new user once with
+`docker compose run --rm --user root --entrypoint chown memory -R 10001:10001 /data`.
 
 Compose refuses to start without `.env`. That is deliberate: the image has no `claude` CLI, so
 a container without a key has no Reflector.
@@ -352,7 +355,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       218 tests, six-process concurrency test included
+tests/test_memory.py       219 tests, six-process concurrency test included
 tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh and e2e/, install_nightly.sh, nightly_catchup.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it

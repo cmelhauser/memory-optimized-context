@@ -115,6 +115,7 @@ else
   "${DC[@]}" up -d --build 2>&1 | tail -2
   check "docker: MCP over HTTP answers on 127.0.0.1:8765" "'$PY' '$E/mcp_http.py' wait"
   check "docker: Path.home() in the container is the host HOME" "[ \"\$(docker exec memory python3 -c 'from pathlib import Path; print(Path.home())')\" = '$H' ]"
+  check "docker: the container runs as the unprivileged user, not root" "[ \"\$(docker exec memory id -u)\" = 10001 ]"
   check "docker: git's identity comes from /etc/gitconfig" "[ \"\$(docker exec memory git config --system user.name)\" = memory ]"
   : > "$W/api.log"
   docker exec memory python3 /app/memory learn --all 2>&1 | tail -1

@@ -15,6 +15,13 @@ the journal line format stable.
 
 ### Changed
 
+- The container no longer runs as root. The image creates an unprivileged user (uid 10001) and runs as it, and Compose
+  takes `user:` from `MEMORY_UID` and `MEMORY_GID` (default 10001), so a Linux host can name its own uid. `/data` is made
+  before the volume is declared, so a new `memory-db` volume belongs to that user. **Upgrading:** a `memory-db` volume
+  made by an earlier release is owned by root and the container can no longer write it; give it to the new user once with
+  `docker compose run --rm --user root --entrypoint chown memory -R 10001:10001 /data`. The native install is unchanged.
+  `test_the_container_runs_as_an_unprivileged_user_and_compose_can_name_the_uid`.
+
 - The nightly catch-up tests no longer show real macOS notifications. The runs that alert on purpose found the real
   `osascript`, so each run of the suite posted "The catch-up did not run as it should" to the desktop; `run_nightly`
   now puts a stand-in `osascript` under the test's `$HOME`.

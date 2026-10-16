@@ -16,6 +16,7 @@ services:
     container_name: memory
     restart: unless-stopped
     env_file: .env                         # ANTHROPIC_API_KEY, optional VOYAGE_API_KEY / MEMORY_EMBED
+    user: "${MEMORY_UID:-10001}:${MEMORY_GID:-10001}"   # not root; on Linux set MEMORY_UID and MEMORY_GID to your own (id -u, id -g)
     environment:
       - HOME=${HOME}                       # not /root: `learn --all` looks under Path.home()
       - MEMORY_ROOT=${HOME}/memory

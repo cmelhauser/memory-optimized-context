@@ -3294,6 +3294,14 @@ def test_the_license_is_the_plain_mit_text_and_the_repository_says_how_to_report
     assert (REPO / ".github" / "PULL_REQUEST_TEMPLATE.md").exists() and (REPO / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml").exists()
 
 
+def test_the_container_runs_as_an_unprivileged_user_and_compose_can_name_the_uid():
+    docker = (REPO / "Dockerfile").read_text()
+    assert re.search(r"(?m)^USER 10001$", docker) and "useradd --system --uid 10001" in docker
+    assert docker.index("mkdir /data") < docker.index("VOLUME /data") < docker.index("USER 10001")    # the volume takes /data's owner
+    assert 'user: "${MEMORY_UID:-10001}:${MEMORY_GID:-10001}"' in (REPO / "docker-compose.yml").read_text()
+    assert "MEMORY_UID" in (REPO / ".env.example").read_text() and "10001:10001 /data" in (REPO / "README.md").read_text()
+
+
 def test_dependabot_watches_the_actions_and_the_image_by_patch_and_leaves_the_universal_locks_to_a_person():
     text = (REPO / ".github" / "dependabot.yml").read_text()
     assert all(f"package-ecosystem: {e}" in text for e in ("github-actions", "docker")) and "interval: weekly" in text
