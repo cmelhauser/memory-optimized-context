@@ -7,6 +7,12 @@ the journal line format stable.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-16
+
+The container runs as an unprivileged user, so a Docker install made with an earlier release needs one command to give
+its `memory-db` volume to it (under Changed). The store's schema, `lid()` and the journal line format are unchanged, and
+the native install needs nothing.
+
 ### Added
 
 - `SECURITY.md` (what is in scope, and GitHub's private vulnerability reporting as the way to report), a bug-report form
