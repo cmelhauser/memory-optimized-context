@@ -51,11 +51,14 @@ chose. 1.0.0 means a month of real use has not required a `store/` branch.
 A tag asserts that the repository was in a releasable state at that commit. All of these, in
 this order:
 
-1. `tools/run_ci_locally.sh --image` and `tools/e2e.sh` clean.
-2. CI green for that commit, including the `container` job: a fast-forward merge puts the
+1. The pins are fresh. Dependabot does not watch the hashed lock files (see `.github/dependabot.yml`), so
+   recompile both with `--upgrade`, with the command in each `.in` file's header, and merge the result in its own
+   pull request when anything moved.
+2. `tools/run_ci_locally.sh --image` and `tools/e2e.sh` clean.
+3. CI green for that commit, including the `container` job: a fast-forward merge puts the
    pull request's tested commit on `main`, so the pull request's run is the run.
-3. `CITATION.cff` `version:` equals the tag without the `v`.
-4. `CHANGELOG.md` has a `## [x.y.z]` section for it, and `[Unreleased]` is empty.
+4. `CITATION.cff` `version:` equals the tag without the `v`.
+5. `CHANGELOG.md` has a `## [x.y.z]` section for it, and `[Unreleased]` is empty.
 
 The tagged commit must be on `main`; the release workflow refuses a tag that is not. Then tag. **Annotated, never lightweight**, because the message is where the state is recorded
 and the release workflow rejects lightweight tags:

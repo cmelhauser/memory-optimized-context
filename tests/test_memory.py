@@ -3275,9 +3275,10 @@ def test_a_compile_that_changes_nothing_makes_no_commit(tmp_path, monkeypatch):
     assert len(log) == 1
 
 
-def test_dependabot_watches_the_actions_the_packages_and_the_image_by_patch():
+def test_dependabot_watches_the_actions_and_the_image_by_patch_and_leaves_the_universal_locks_to_a_person():
     text = (REPO / ".github" / "dependabot.yml").read_text()
-    assert all(f"package-ecosystem: {e}" in text for e in ("github-actions", "pip", "docker")) and "interval: weekly" in text
+    assert all(f"package-ecosystem: {e}" in text for e in ("github-actions", "docker")) and "interval: weekly" in text
+    assert "package-ecosystem: pip" not in text                                  # its updater drops the locks' markers
     assert "semver-minor" in text and "semver-major" in text                      # the base image moves by patch only
 
 
