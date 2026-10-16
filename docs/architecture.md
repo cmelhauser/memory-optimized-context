@@ -24,7 +24,8 @@ way.
    Cursor, Claude Desktop's agent mode, Codex), git repositories (commit messages and docs), note
    folders, and claude.ai, ChatGPT and Gemini exports. Each source has a cursor in the `sources`
    table, so the walk is incremental: a commit hash, a content hash, a byte offset, an export's
-   update time. `[project] fact` lines anywhere are ingested without an LLM call; prose,
+   update time (a commit cursor lists the tip of every branch). `[project] fact` lines anywhere are ingested without an
+   LLM call (in a repository's own docs only those for its own slug); prose,
    transcripts and chats are windowed into ~30k-character batches for the Reflector, headers
    counted, so nothing is cut. A Claude Code transcript's project is the `cwd` recorded in it,
    the same slug the Stop hook derives, a worktree counting as its repository; the other tools'
@@ -46,13 +47,13 @@ way.
    did, and the next run resumes there.
 3. **Ingest.** Each lesson is upserted by `sha1(project | normalised text)[:10]`. An exact
    duplicate is a vote. Nothing is ever overwritten.
-4. **Reconcile.** A new lesson is compared with its nearest neighbours in the same project, up
-   to six; one with none costs no call. Up to eight new lessons share a call, each with its own
+4. **Reconcile.** A new lesson is compared with its nearest neighbours in the same project and
+   in `all`, up to six; one with none costs no call. Up to eight new lessons share a call, each with its own
    candidates, and the answer gives each its own verdict. A check that gets no answer, or that a `--max-calls`
    budget leaves for later, is owed: a `recheck:<id>` row in `sources`, paid first by the next
    `learn`.
    `same` folds the new lesson's votes into the older one and retires the new one as `merged`.
-   `contradicts` marks the older lesson `superseded` by the new one. Both stay in the database.
+   `contradicts` marks the lesson from the older source `superseded` by the one from the newer. Both stay in the database.
 5. **Prune.** `score = (votes + helpful - 2*harmful) * 0.5^(age_days/90)`. Below 0.15, or
    `harmful >= 2`, moves a lesson to `archived` and appends it to `archive/YYYY-MM.md`.
    Age runs from `last_seen`, the time the lesson's source was written (a transcript's, journal
@@ -116,7 +117,7 @@ Embeddings are off by default. The corpus is dense with exact tokens (`maxconn`,
 - **Lock:** `mkdir .lock` on the bind-mounted store, so host and container processes serialise
   against the same directory. Waits up to 20 s (2 s for the SessionStart hook's
   `ingest --wait 2`), then gives up with `LockBusy`; the MCP tools answer "busy" instead of
-  stopping. Breaks a lock older than 10 minutes. A Stop hook waits up to 120 s, and holds the
+  stopping. Breaks a lock untouched for 10 minutes (a holder touches it every 60 s). A Stop hook waits up to 120 s, and holds the
   lock only to store its lessons and to settle contradiction checks, never across a Reflector
   call; `.reflecting/` holds one claim per transcript a hook is reflecting.
 - **Outputs:** `.tmp` sibling then `os.replace`. A reader never sees a torn file.

@@ -15,7 +15,7 @@ reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v0.2.5`. 216 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v0.2.5`. 217 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. It has run natively against a real store
@@ -29,7 +29,7 @@ since 15 September 2026.
 | Capture from Desktop, web, mobile, Cowork | `memory ingest --export conversations.json` (claude.ai → Settings → Privacy → Export data). Same Reflector. Idempotent per conversation `updated_at`. Claude Desktop also gets live `remember`/`recall` via the MCP server. |
 | Semantic recall | `MEMORY_EMBED=voyage` (or `openai`). Hybrid FTS5 + cosine, fused with RRF. Off by default; keyword search alone works. numpy in the image makes ranking 5,000 lessons a ~20 ms matmul; the stdlib fallback is ~300 ms. |
 | Learn from history | `memory learn --all`: Claude Code transcripts, git commit messages and docs of every repo, notes, claude.ai, ChatGPT and Gemini exports. Incremental by cursor. |
-| Contradiction handling | Every new lesson is compared with its nearest neighbours in the same project, up to eight new lessons to a call. `same` → votes merge. `contradicts` → older lesson marked `superseded_by` newer. ADD-only: nothing is deleted, `search --all` still finds it. |
+| Contradiction handling | Every new lesson is compared with its nearest neighbours in the same project and in `all`, up to eight new lessons to a call. `same` → votes merge. `contradicts` → the lesson from the older source is marked `superseded_by` the one from the newer. ADD-only: nothing is deleted, `search --all` still finds it. |
 | Automatic pruning | score = (votes + helpful − 2·harmful) × 0.5^(age/90d). Below threshold or harmful ≥ 2 → archived to `archive/YYYY-MM.md`, removed from compiled output, still searchable. |
 | Parallel-safe | One journal file per event (never appended). Single `mkdir` lock around every DB/compiled write. Atomic rename on output. SQLite WAL. |
 
@@ -179,7 +179,7 @@ database, so it is safe to run daily; a second run over an unchanged source make
 | Source | Flag | What is read | Cursor |
 |---|---|---|---|
 | Transcripts: Claude Code, Cursor, Claude Desktop's agent mode, Codex | `--transcripts [--transcripts-from DIR]` | every transcript in the folders under [What `--transcripts` reads](#what---transcripts-reads), whole, in ~30k windows; for Claude Code, each session and, beneath it, its subagents and workflow agents | byte offset per file, moved window by window |
-| A git repository | `--repo PATH` | commit messages (`--no-merges`, oldest first), `README*`, `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `HANDOFF.md`, `docs/**/*.md`, `*.md` | last commit reflected; content hash per doc |
+| A git repository | `--repo PATH` | commit messages (`--no-merges`, oldest first), `README*`, `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `HANDOFF.md`, `docs/**/*.md`, `*.md` | the tip of every branch, as a list; content hash per doc |
 | A folder of notes | `--notes DIR [--project slug]` | every `.md` and `.txt`, recursively | content hash per file |
 | claude.ai export (web, Desktop, mobile, Cowork) | `--export FILE` | `conversations.json`, both message shapes | `updated_at` per conversation |
 | ChatGPT export | `--export FILE` | `conversations.json`, the branch of each chat that was on screen | `update_time` per conversation |
@@ -193,7 +193,8 @@ own `claude -p` calls pass `--no-session-persistence`, so they leave no transcri
 and a backfill skips any an older version left behind.
 
 Lines already in the form `[project] fact` (bulleted or not) in any doc or note are ingested
-directly with no LLM call; a ticked task-list item such as `- [x] done` is not one. Everything else goes through the Reflector in windows of about 30k
+directly with no LLM call. In a repository's own docs such a line is a lesson only for that repository's slug; one for
+`all` or another project is prose for the Reflector. In `--notes`, which are yours, it may name any project. A ticked task-list item such as `- [x] done` is not one. Everything else goes through the Reflector in windows of about 30k
 characters, one Haiku call per window; a document longer than a window is read in several, and
 counts as read only when the last of them has been answered. A repository with a thousand commits costs roughly ten
 calls the first time and none afterwards. `--since 2025-01-01` bounds the first pass. No notes
@@ -293,7 +294,7 @@ time. `memory status` summarises the last seven days. To see whether hooks are l
 date: a Stop hook waits up to 120 s for it and the SessionStart hook 2 s, so a few SessionStart
 lines during a long `learn` are expected and a Stop hook's are not. Each `hook`, `ingest` and `learn` line
 ends with the Reflector calls it made and the dollars `claude -p` reported for them (`; 7 Reflector calls,
-$0.046`; none on the SDK path), so what a night or a day costs can be read off the log.
+$0.046`; `$0.000` on the SDK path, which reports no cost), so what a night or a day costs can be read off the log.
 
 ### A nightly catch-up
 
@@ -329,6 +330,9 @@ or a spent limit is the usual cause of exit 2; `echo 'Say OK' | claude -p --outp
 | `MEMORY_HALF_LIFE` | `90` | days |
 | `MEMORY_MAX_LINES` | `150` | per compiled file; keep under Claude Code's 200-line import cap |
 | `MEMORY_MIN_SCORE` | `0.15` | archive below this |
+| `MEMORY_STATE_DIR` | `~/.local/share/memory-optimized-context` | where `memory status` and the nightly job keep and read `backfill.log` and `needs-attention` |
+| `MEMORY_PYTHON` | this checkout's `.venv`, else `python3` | the nightly job's interpreter |
+| `CALLS`, `RETRY_WAIT` | `60`, `60` | the nightly job's Reflector-call budget, and the seconds it waits between tries while a hook holds the lock |
 
 ## Guarantees
 
@@ -338,7 +342,7 @@ or a spent limit is the usual cause of exit 2; `echo 'Say OK' | claude -p --outp
 - Reflection can't recurse: `MEMORY_REFLECT=1` is set on the inner `claude -p`, and both hooks exit on it.
 - The Reflector can only answer: its `claude -p` runs with no tools, no MCP servers and no extended thinking, its instructions as the system prompt. A transcript that tells an agent what to do is read, not obeyed.
 - The lock is a `mkdir` on the bind-mounted `~/memory/.lock`, so host processes and container processes serialize against each other.
-- Every compile is a git commit. `git log -p compiled/` is the audit trail.
+- A compile that changed something is a git commit, when the store is a git repository (`tools/init_store.sh` makes it one). `git log -p compiled/` is the audit trail.
 - Nothing is ever deleted: superseded, merged, and archived lessons stay in `memory.db` and `archive/`.
 
 ## Repository layout
@@ -348,14 +352,17 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       216 tests, six-process concurrency test included
-tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh, install_nightly.sh, nightly_catchup.sh, check_docs.py, eval_recall.py
+tests/test_memory.py       217 tests, six-process concurrency test included
+tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh and e2e/, install_nightly.sh, nightly_catchup.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
 docs/research.md           what was checked before deciding, and what each finding changed
 docs/decisions/            one record per closed alternative
 docs/diagrams/             the original sketch and four drafts, ending at 04-as-built.svg
-Dockerfile, docker-compose.yml, .env.example
+Dockerfile, docker-compose.yml, .env.example, .dockerignore
+requirements-*.in/.txt     the pins: the image's runtime packages and the dev tools, hashed (see the header of each .txt)
+.github/                   the CI and release workflows, Dependabot's config
+AGENTS.md, CLAUDE.md, CONTRIBUTING.md, RELEASING.md, CHANGELOG.md, CITATION.cff, LICENSE, ATTRIBUTION.md
 ```
 
 ## Development

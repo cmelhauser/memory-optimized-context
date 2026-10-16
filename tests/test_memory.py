@@ -3000,6 +3000,14 @@ def test_status_reports_the_store_what_it_owes_the_nightly_job_and_the_hooks(m, 
     m.LOCK.rmdir()
 
 
+def test_status_on_a_machine_with_no_store_reports_an_empty_one_and_does_not_create_it(m, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("MEMORY_STATE_DIR", str(tmp_path / "state"))
+    m.DB.unlink(missing_ok=True)
+    m.cmd_status(types.SimpleNamespace())
+    out = capsys.readouterr().out
+    assert "0 active lessons in 0 projects" in out and "0 MB" in out and not m.DB.exists()
+
+
 def test_a_run_logs_how_many_calls_it_made_and_what_the_cli_said_they_cost(m, tmp_path, monkeypatch, capsys):
     fake = tmp_path / "fakebin"
     fake.mkdir()

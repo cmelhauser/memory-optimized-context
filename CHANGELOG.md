@@ -32,6 +32,19 @@ until the system has run against a real store for at least a month.
   jump to Python 3.14, which CI does not cover. Both are closed with a reason. Its pull request for the six pinned
   actions was merged: CI had run on it.
 
+### Fixed
+
+- `memory status` created an empty `memory.db` on a machine with no store, which it is documented not to touch: it now
+  reports an empty store and leaves none behind.
+  `test_status_on_a_machine_with_no_store_reports_an_empty_one_and_does_not_create_it`.
+
+- A review of the documents against the code corrected what they said of it: a contradiction check also looks at the
+  `all` project, and the lesson from the older source loses; in a repository's own docs a `[project] fact` line counts
+  only for that repository; a commit cursor is the tip of every branch; a lock is broken after 10 minutes untouched,
+  its holder touching it every 60 s; the SDK path logs `$0.000`; a compile is a commit only when something changed and
+  the store is a git repository. The environment table lists `MEMORY_STATE_DIR`, `MEMORY_PYTHON`, `CALLS` and
+  `RETRY_WAIT`, the layout lists what was missing, and `RELEASING.md` no longer says the first month is still to run.
+
 ## [0.2.5] - 2026-10-15
 
 ### Added

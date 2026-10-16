@@ -48,8 +48,8 @@ before editing either.
 - A lesson is stored as one printable line of at most 500 characters (`clean_lesson`, applied in `upsert`),
   under a slug of at most 64 characters, with nothing that cannot be encoded: it is model-written text that
   every session imports from `compiled/`, so a newline in it must not forge a heading or an `@` line.
-- An adapter reads only files that are its root's own: not a symlink, not under one that leads out, at most
-  2 MB (`inside()`), so a cloned repository cannot send `~/.ssh` to the Reflector. The HTTP MCP server accepts
+- The repo-doc and notes adapters read only files that are their root's own: not a symlink, not under one that leads out,
+  at most 2 MB (`inside()`), so a cloned repository cannot send `~/.ssh` to the Reflector. The HTTP MCP server accepts
   only a loopback `Host` and `Origin` (plus `--allowed-host`), whatever `--host` it listens on.
 - A `[proj] fact` line in a repository's own docs is a lesson only for that repository's slug; one for `all` or
   another project is prose for the Reflector. In `--notes` it may name any project: they are the operator's own.
