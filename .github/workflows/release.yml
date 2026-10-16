@@ -87,6 +87,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write       # the Sigstore certificate for the attestations below is issued to this job's identity
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -101,6 +103,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push arm64 and amd64
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
@@ -116,3 +119,44 @@ jobs:
           provenance: mode=max
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # BuildKit's attestations above are unsigned: anyone who can write to the registry could replace them. These are
+      # signed with a short-lived Sigstore certificate bound to this workflow run, and recorded in GitHub's attestation
+      # store and next to the image. `gh attestation verify oci://ghcr.io/<repo>:<tag> --repo <repo>` checks one.
+      - name: Sign the build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      # The SBOM BuildKit made is read back from the registry, one per platform, and each is signed against that
+      # platform's manifest, since each describes the packages of one architecture.
+      - name: Read the SBOMs and the platform digests
+        id: sbom
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            docker buildx imagetools inspect "$IMAGE" --format "{{ json (index .SBOM \"linux/$arch\").SPDX }}" > "sbom-$arch.spdx.json"
+            digest="$(docker buildx imagetools inspect "$IMAGE" --raw | jq -r --arg a "$arch" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $a) | .digest')"
+            [ -s "sbom-$arch.spdx.json" ] && [ -n "$digest" ] || { echo "::error::no SBOM or no manifest for $arch"; exit 1; }
+            echo "$arch=$digest" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Sign the amd64 SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.sbom.outputs.amd64 }}
+          sbom-path: sbom-amd64.spdx.json
+          push-to-registry: true
+
+      - name: Sign the arm64 SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.sbom.outputs.arm64 }}
+          sbom-path: sbom-arm64.spdx.json
+          push-to-registry: true

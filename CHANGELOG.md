@@ -7,6 +7,16 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+### Changed
+
+- The release workflow signs the image's attestations. The build provenance is signed by `actions/attest-build-provenance`
+  and each platform's SBOM, read back from the registry, by `actions/attest-sbom`: Sigstore certificates issued to the
+  publish job's identity, recorded in GitHub's attestation store and attached to the image. Only that job holds
+  `id-token: write` and `attestations: write`. BuildKit's own unsigned attestations stay. Check one with
+  `gh attestation verify oci://ghcr.io/cmelhauser/memory-optimized-context:<tag> --repo cmelhauser/memory-optimized-context`.
+  The steps run only on a tag, so the first tag after this change tests them.
+  `test_workflows_pin_actions_by_commit_and_only_the_publish_job_writes_packages`.
+
 ## [0.2.6] - 2026-10-16
 
 ### Added
