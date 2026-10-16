@@ -7,6 +7,8 @@ until the system has run against a real store for at least a month.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-10-16
+
 ### Added
 
 - The published image carries an SBOM and build provenance (`mode=max`) as BuildKit attestations. They are unsigned: signing
