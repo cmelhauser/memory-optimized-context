@@ -3,6 +3,8 @@
 This is a personal tool with a public repository. Contributions are welcome; the bar is that they
 keep the guarantees in `README.md` under "Guarantees" intact.
 
+This project follows the Contributor Covenant (`CODE_OF_CONDUCT.md`).
+
 ## Before you open a pull request
 
 1. Read `AGENTS.md`. It is short and it is the same set of rules for people and for agents.
