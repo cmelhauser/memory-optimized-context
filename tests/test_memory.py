@@ -3122,7 +3122,7 @@ def test_workflows_pin_actions_by_commit_and_only_the_publish_job_writes_package
     assert "sbom: true" in publish and "provenance: mode=max" in publish                   # what is in the image, and how it was built
     assert "id-token: write" not in top and jobs.count("id-token: write") == 1 and jobs.count("attestations: write") == 1
     assert "id-token: write" in publish                                                    # only the job that signs can get a certificate
-    assert publish.count("actions/attest-sbom@") == 2 and publish.count("actions/attest-build-provenance@") == 1
+    assert publish.count("actions/attest@") == 2 and "attest-sbom" not in publish and publish.count("actions/attest-build-provenance@") == 1
     assert publish.count("push-to-registry: true") == 3                                    # signed next to the image, not only in GitHub's store
 
 
