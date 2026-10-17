@@ -7,6 +7,10 @@ the journal line format stable.
 
 ## [Unreleased]
 
+### Changed
+
+- The copyright holder in `LICENSE` now reads "Christopher Melhauser (GitHub: cmelhauser)", the same name in every repository (it said "cmelhauser"). The MIT terms are unchanged.
+
 ## [1.1.0] - 2026-10-16
 
 The container runs as an unprivileged user, so a Docker install made with an earlier release needs one command to give
