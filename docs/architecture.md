@@ -2,7 +2,7 @@
 
 The system as built. For how it got here, read `docs/research.md` and the decision records in
 `docs/decisions/`. For the drawings, `docs/diagrams/04-as-built.svg` is this document in one
-picture; `00` to `03` are the earlier drafts, kept because each one was wrong in an instructive
+picture, showing the main paths (the README lists every adapter); `00` to `03` are the earlier drafts, kept because each one was wrong in an instructive
 way.
 
 ## The rule everything follows
@@ -61,7 +61,7 @@ way.
    old lessons look new. A lesson met again keeps its newest `last_seen` and oldest `first_seen`.
 6. **Compile.** Active lessons, sorted by score, capped at 150 lines per file, written to
    `compiled/PLAYBOOK.md` (project `all`) and `compiled/projects/<slug>.md` via `.tmp` then
-   `os.replace`. Then one git commit. A project with more active lessons than the cap shows only
+   `os.replace`. Then, when the store is a git repository and something changed, one git commit. A project with more active lessons than the cap shows only
    its top 150 here; the rest are in the database and reached by `search` and the MCP `recall`.
    Search is full-text (BM25) unless an embedding provider is set.
 7. **Deliver.** Claude Code reads the project file through an `@` import in `CLAUDE.md`.
@@ -123,7 +123,8 @@ Embeddings are off by default. The corpus is dense with exact tokens (`maxconn`,
 - **Outputs:** `.tmp` sibling then `os.replace`. A reader never sees a torn file.
 - **SQLite:** WAL, 30 s busy timeout, and on a named Docker volume rather than a macOS bind mount.
 - **Recursion:** the Reflector's own `claude -p` runs with `MEMORY_REFLECT=1`; both hooks exit
-  immediately when it is set.
+  immediately when it is set, and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` keeps that call from writing
+  an auto-memory of its own.
 - **The Reflector only answers:** its `claude -p` runs with no tools, no MCP servers and no
   extended thinking, its instructions as the system prompt and the conversation alone on stdin.
   A transcript of another agent's task is read, not carried out.

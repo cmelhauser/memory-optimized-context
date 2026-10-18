@@ -5,7 +5,7 @@
 # environment markers for every Python from 3.10; Dependabot's pip updater regenerates them without the markers, so its
 # pull request fails on 3.10 and would reopen every week. They are refreshed by hand: RELEASING.md, first step.
 #
-# The base image moves by patch only: CI covers Python 3.10 to 3.13 and the image targets 3.12, so a jump to another
+# The base image moves by patch only: CI covers Python 3.10, 3.12 and 3.13 and the image targets 3.12, so a jump to another
 # minor is for a person.
 version: 2
 updates:

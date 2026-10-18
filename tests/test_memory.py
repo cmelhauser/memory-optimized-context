@@ -55,16 +55,19 @@ def load(root, monkeypatch, **env):
 
 @pytest.fixture
 def m(tmp_path, monkeypatch):
+    """The `memory` module, loaded fresh with its store under the test's own temporary directory."""
     return load(tmp_path, monkeypatch)
 
 
 def journal(m, lines, sub="claude-ai", name="n.md"):
+    """Write a journal file of lesson lines, as a hook or claude.ai would."""
     d = m.JOURNAL / sub
     d.mkdir(parents=True, exist_ok=True)
     (d / name).write_text("\n".join(lines) + "\n")
 
 
 def run_ingest(m):
+    """Fold the journal into the store, without compiling."""
     with m.Lock(), m.db() as c:
         new = m.ingest_journal(c)
         m.post_ingest(c, new)
@@ -255,6 +258,7 @@ def test_hybrid_search_uses_embeddings_when_enabled(tmp_path, monkeypatch):
 
 
 def fake_llm(reflect_json, contra_json):
+    """A stand-in Reflector: `reflect_json` for a transcript, `contra_json` for a contradiction check."""
     def f(prompt, system="", max_tokens=0):
         return json.dumps(contra_json if "CANDIDATES:" in prompt else reflect_json)
     return f
@@ -391,7 +395,8 @@ def test_reconcile_ignores_ids_not_among_candidates(m, monkeypatch):
 
 
 def transcript(path, turns, cwd=None):
-    with open(path, "w") as f:
+    """Write a Claude Code transcript of alternating user and assistant turns."""
+    with open(path, "w", encoding="utf-8") as f:
         for role, text in turns:
             content = text if role == "user" else [{"type": "text", "text": text}]
             entry = {"type": role, "message": {"role": role, "content": content}}
@@ -405,7 +410,7 @@ def test_claude_code_transcript_is_parsed_incrementally(m, tmp_path):
     transcript(p, [("user", "hi"), ("assistant", "hello")])
     text, end = m.claude_code_turns(p)
     assert text == "USER: hi\n\nASSISTANT: hello"
-    with open(p, "a") as f:
+    with open(p, "a", encoding="utf-8") as f:
         f.write(json.dumps({"type": "user", "message": {"content": "more"}}) + "\n")
     text2, end2 = m.claude_code_turns(p, end)
     assert text2 == "USER: more" and end2 > end
@@ -488,6 +493,7 @@ def test_score_decays_with_age(m):
 
 
 def hook_json(tmp_path, msg, transcript_path=None):
+    """Write the JSON a Stop hook receives on stdin, and return its path."""
     j = {"session_id": "s", "cwd": "/tmp/x/chart-dashboard", "last_assistant_message": msg}
     if transcript_path:
         j["transcript_path"] = str(transcript_path)
@@ -527,8 +533,8 @@ def test_cmd_hook_is_inert_inside_reflection(m, tmp_path, monkeypatch):
 def test_parallel_hook_processes_do_not_lose_updates(m, tmp_path):
     p = hook_json(tmp_path, "LESSONS:\n[all] racey\n")
     env = {**os.environ, "MEMORY_ROOT": str(m.ROOT), "MEMORY_LLM": "none"}
-    procs = [subprocess.Popen([sys.executable, str(BIN), "hook", "--role", "sub", "--input", str(p)], env=env,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for _ in range(6)]
+    procs = [subprocess.Popen([sys.executable, str(BIN), "hook", "--role", "sub", "--input", str(p)], env=env,  # pylint: disable=consider-using-with
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for _ in range(6)]   # six at once, all waited for below
     assert all(pr.wait() == 0 for pr in procs)
     with m.db() as c:
         assert c.execute("SELECT votes FROM lessons").fetchone()[0] == 6
@@ -562,6 +568,7 @@ def test_mcp_tools_are_registered(m, monkeypatch):
     captured = {}
 
     class Args:
+        """The parsed arguments `memory mcp` reads."""
         transport = "stdio"
         port = 0
         host = "127.0.0.1"
@@ -613,7 +620,7 @@ def test_eval_recall_reports_hits_and_misses(m, tmp_path, capsys):
     q.write_text(json.dumps({"query": "GID", "project": "all", "expect": ["GID=20"]}) + "\n"
                  + json.dumps({"query": "maxconn", "project": "node", "expect": ["4000"]}) + "\n")
     sys.path.insert(0, str(REPO / "tools"))
-    import eval_recall
+    import eval_recall  # pylint: disable=import-error  # tools/ is put on sys.path on the line above
     assert eval_recall.main([str(q), "--min", "0.9"]) == 1
     out = capsys.readouterr().out
     assert "recall@8: 1/2" in out and "miss: maxconn" in out
@@ -632,6 +639,7 @@ def test_check_docs_passes_on_this_tree(monkeypatch, capsys):
 
 
 def git_repo(path, name):
+    """Create a git repository with one commit, and return its path."""
     path.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
     subprocess.run(["git", "-C", str(path), "config", "user.email", "t@t"], check=True)
@@ -838,7 +846,9 @@ def test_llm_uses_the_sdk_when_an_api_key_is_present(tmp_path, monkeypatch):
     sent = {}
 
     class Messages:
+        """The SDK's `messages` resource."""
         def create(self, **kw):
+            """Record the request and answer like the Messages API."""
             sent.update(kw)
             return types.SimpleNamespace(content=[types.SimpleNamespace(type="text", text="[]"),
                                                   types.SimpleNamespace(type="thinking")])
@@ -1017,7 +1027,9 @@ def test_llm_answers_none_on_sdk_errors_cli_errors_and_timeouts(tmp_path, monkey
     """Every way a call can fail comes back as None, which reflect() turns into ReflectorFailed; none
     raises through a whole run. `claude -p` can report an error with exit status 0, so its JSON is read."""
     class Messages:
+        """The SDK's `messages` resource."""
         def create(self, **kw):
+            """Record the request and answer like the Messages API."""
             raise RuntimeError("529 overloaded")
 
     fake = types.ModuleType("anthropic")
@@ -1066,10 +1078,10 @@ def test_a_half_written_last_line_is_left_for_the_next_read(m, tmp_path):
     p = tmp_path / "t.jsonl"
     transcript(p, [("user", "hi")])
     whole = p.stat().st_size
-    with open(p, "a") as f:
+    with open(p, "a", encoding="utf-8") as f:
         f.write('{"type": "assistant", "message": {"content": "hal')
     assert m.claude_code_turns(p) == ("USER: hi", whole)
-    with open(p, "a") as f:
+    with open(p, "a", encoding="utf-8") as f:
         f.write('f"}}\n')
     assert m.claude_code_turns(p, whole) == ("ASSISTANT: half", p.stat().st_size)
 
@@ -1107,17 +1119,20 @@ def test_ingest_wait_bounds_how_long_session_start_can_block(m):
 def fake_mcp(monkeypatch, v2):
     """One server class standing in for mcp 2.x's MCPServer or 1.x's FastMCP; it records its tools and its run()."""
     class Server:
+        """One server class standing in for the MCP SDK's, recording its tools and its run()."""
         def __init__(self, *args, **kwargs):
             self.args, self.kwargs, self.tools, self.runs = args, kwargs, {}, []
             Server.last = self
 
         def tool(self):
+            """The decorator that registers a tool."""
             def register(fn):
                 self.tools[fn.__name__] = fn
                 return fn
             return register
 
         def run(self, **kwargs):
+            """Record how the server was started."""
             self.runs.append(kwargs)
 
     mod = types.ModuleType("mcp_stand_in")
@@ -1849,7 +1864,7 @@ def test_the_budget_counts_the_calls_it_actually_makes(m, tmp_path, monkeypatch,
     never happen — a lesson already in the store, or one with nothing to compare against, costs nothing — so a
     budget of 60 bought a fraction of the work it was given."""
     calls = []
-    def counting_llm(prompt, system=m.REFLECT_SYS, *a, **k):
+    def counting_llm(prompt, system=m.REFLECT_SYS, *a, **k):  # pylint: disable=keyword-arg-before-vararg  # the signature the Reflector is called with
         calls.append(prompt)
         if system == m.CONTRA_SYS: return '{"same": [], "contradicts": []}'
         return json.dumps([{"project": "proj", "text": f"lesson {len(calls)} from the window"}])
@@ -2093,6 +2108,7 @@ def test_an_exported_chat_is_filed_under_claude_ai_not_under_its_title(m, tmp_pa
 
 
 def chatgpt_node(parent, role, content, hidden=False):
+    """One node of a ChatGPT export's conversation tree."""
     meta = {"is_visually_hidden_from_conversation": True} if hidden else {}
     return {"parent": parent, "message": {"author": {"role": role}, "content": content, "metadata": meta}}
 
@@ -2150,6 +2166,7 @@ def test_a_chatgpt_conversation_is_keyed_by_id_when_it_has_no_conversation_id(m,
 
 
 def gemini(title, when, html="", header="Gemini Apps", products=("Gemini Apps",)):
+    """One entry of a Gemini Takeout activity file."""
     r = {"header": header, "title": title, "time": when, "products": list(products)}
     if html: r["safeHtmlItem"] = [{"html": html}]
     return r
@@ -2246,6 +2263,7 @@ def test_takeout_times_and_html_are_read_plainly(m):
 
 
 def load_tool(name):
+    """Import a script from tools/ as a module, without putting tools/ on the path."""
     loader = importlib.machinery.SourceFileLoader(f"tool_{name}", str(REPO / "tools" / f"{name}.py"))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
@@ -2343,12 +2361,14 @@ def test_bootstrap_dry_run_touches_nothing(tmp_path):
 
 
 def seen_of(m, text):
+    """The day it was first and last seen, and the votes, of the lesson with this text."""
     with m.db() as c:
         r = c.execute("SELECT first_seen, last_seen, votes FROM lessons WHERE text=?", (text,)).fetchone()
     return r["first_seen"][:10], r["last_seen"][:10], r["votes"]
 
 
 def days_ago(n):
+    """The date, as YYYY-MM-DD, n days ago."""
     return (datetime.now(timezone.utc) - timedelta(days=n)).strftime("%Y-%m-%d")
 
 
@@ -2445,6 +2465,7 @@ def fake_memory(tmp_path, rc, lines=(), lock_held_first=False):
 
 
 def run_nightly(tmp_path, fake, **extra):
+    """Run tools/nightly_catchup.sh in a sandbox with a fake `memory`, and return the completed process."""
     # The script looks in $HOME/.local/bin first, so a stand-in osascript there keeps a run that alerts on purpose from
     # showing a real notification; a test that wants to see the call writes its own stand-in before this runs.
     stub = tmp_path / ".local" / "bin" / "osascript"
@@ -2494,6 +2515,7 @@ def test_the_nightly_catch_up_notifies_when_it_can(tmp_path):
 
 
 def fake_tools(tmp_path, system):
+    """An environment whose PATH starts with a stand-in `uname` (reporting `system`) and a `launchctl` that logs its calls."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     # `print` fails: the old job is already gone, so the installer need not wait for it. A first `bootstrap` fails when
@@ -2508,6 +2530,7 @@ def fake_tools(tmp_path, system):
 
 
 def install_nightly(env, *args):
+    """Run tools/install_nightly.sh with the given environment and arguments."""
     return subprocess.run(["bash", str(REPO / "tools" / "install_nightly.sh"), *args], env=env, capture_output=True, text=True, timeout=30, check=False)
 
 
@@ -2728,6 +2751,7 @@ def test_stamp_is_always_utc_so_that_text_order_is_time_order(m):
 
 
 def lesson_from(m, c, when, text, project="p"):
+    """Store a lesson as if its source had been written at `when`."""
     with m.seen_at(when): return m.upsert(c, project, text)[0]
 
 
@@ -3161,6 +3185,7 @@ def test_a_journal_file_appears_whole_or_not_at_all(m):
 
 
 def init_store_in(tmp_path, monkeypatch, identity=True, gitignore=True):
+    """A temporary store directory that is a git repository, with or without a user identity and a .gitignore."""
     root = tmp_path / "store"
     root.mkdir()
     subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
@@ -3217,6 +3242,7 @@ def test_remember_while_the_store_is_busy_is_saved_not_to_be_run_again(m, monkey
 
 
 def hook_env(tmp_path, **extra):
+    """The environment the hooks run under in a test: the real one with HOME in the test's directory, the Reflector guard cleared, and `extra`."""
     return {**os.environ, "HOME": str(tmp_path / "home"), "MEMORY_REFLECT": "", **extra}
 
 
@@ -3326,4 +3352,3 @@ def test_every_python_package_and_the_base_image_are_pinned_with_hashes_and_inst
         text = (REPO / ".github" / "workflows" / flow).read_text()
         installs = [ln for ln in text.splitlines() if "pip install" in ln]
         assert installs and all("--require-hashes" in ln for ln in installs), flow
-

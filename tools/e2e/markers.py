@@ -4,7 +4,7 @@ import json
 import pathlib
 import sys
 
-prompts = [json.loads(line)["prompt"] for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
+prompts = [json.loads(line)["prompt"] for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()]
 seen = [sum(f"M{i:03d} " in p for p in prompts) for i in range(160)]
 carrying = sum(any(f"M{i:03d} " in p for i in range(160)) for p in prompts)
 bad = [i for i, n in enumerate(seen) if n != 1]

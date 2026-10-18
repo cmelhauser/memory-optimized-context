@@ -9,6 +9,10 @@ the journal line format stable.
 
 ### Changed
 
+- Pylint is a second gate beside ruff: `.pylintrc` requires 10.00 over `bin/memory`, `tools/` and `tests/`, in CI's lint job and in `tools/run_ci_locally.sh`, and pins `pylint` in `requirements-dev.txt`. What the configuration switches off is each given a reason in the file. Every function in the tool and the scripts now has a docstring, and a docstring that had been left under a statement in `ingest_transcript` is where it belongs.
+- Every text file the tool reads or writes is opened as UTF-8 by name, instead of by the machine's locale, so what is written is the same on every host.
+- The release workflow signs each platform's SBOM with `actions/attest`, which replaces the deprecated `actions/attest-sbom`; `RELEASING.md` says what to do when signing hits a Rekor timeout (re-run the failed job). `test_workflows_pin_actions_by_commit_and_only_the_publish_job_writes_packages` covers the workflow.
+- Documentation brought in line with the code: the README's `MEMORY_ROOT`, `MEMORY_UID`, `MEMORY_GID`, `memory hook` flags and `MEMORY_MAX_LINES` rows (Claude Code's 200 lines is guidance for an instruction file, not an import cap); decision 002 (the database is the system of record, not a derived index), 005 and 006; the architecture notes on the commit, on the image and on `CLAUDE_CODE_DISABLE_AUTO_MEMORY`; the as-built diagram's inputs; the tag example in `RELEASING.md`; and the rule on personal data, which now names the copyright holder in `LICENSE` as the one exception.
 - The copyright holder in `LICENSE` now reads "Christopher Melhauser (GitHub: cmelhauser)", the same name in every repository (it said "cmelhauser"). The MIT terms are unchanged.
 
 ## [1.1.0] - 2026-10-16

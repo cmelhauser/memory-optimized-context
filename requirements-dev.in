@@ -12,6 +12,8 @@ coverage>=7.4
 # Lint. The ruleset catches defects rather than restyling code (see ruff.toml), so a newer ruff
 # is unlikely to start failing the build on style.
 ruff>=0.6
+# The second linter: pylint, held to 10.00 over bin/memory, tools/ and tests/ by .pylintrc.
+pylint>=3.3
 # Shell lint for hooks/*.sh and tools/*.sh. The wheel bundles the shellcheck binary.
 shellcheck-py>=0.10
 # Optional at runtime, required by the MCP server test.

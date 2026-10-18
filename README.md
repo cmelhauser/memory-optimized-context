@@ -56,7 +56,7 @@ carry `memory.db` across when you switch.
 git clone https://github.com/cmelhauser/memory-optimized-context ~/GitHub/memory-optimized-context
 cd ~/GitHub/memory-optimized-context
 tools/init_store.sh                          # creates ~/memory with its own .git
-python3 -m venv .venv && .venv/bin/pip install --require-hashes -r requirements-runtime.txt   # MCP server + SDK, the image's pins
+python3 -m venv .venv && .venv/bin/pip install --require-hashes -r requirements-runtime.txt   # MCP server, SDK and numpy, the image's pins
 .venv/bin/python3 bin/memory compile
 ```
 
@@ -284,7 +284,7 @@ memory learn [--all [--repos DIR] [--exports DIR]] [--repo PATH [--since DATE]] 
 memory compile
 memory mcp [--transport stdio | http] [--port 8765] [--host 127.0.0.1] [--allowed-host NAME]   # HTTP: this machine only unless --host says
                                                                                                   # otherwise; a request's Host must be loopback or NAME
-memory hook [--role main | sub]              # run by the hooks, not by hand
+memory hook [--role main | sub] [--input FILE] [--project SLUG]   # run by the hooks, not by hand
 ```
 
 `memory --help` and `memory COMMAND --help` describe every flag.
@@ -323,7 +323,7 @@ or a spent limit is the usual cause of exit 2; `echo 'Say OK' | claude -p --outp
 
 | Var | Default | Notes |
 |---|---|---|
-| `MEMORY_ROOT` | `~/memory` | set in the image to the mounted host path |
+| `MEMORY_ROOT` | `~/memory` | set by `docker-compose.yml` to the mounted host path |
 | `MEMORY_DB` | `$MEMORY_ROOT/memory.db` | `/data/memory.db` in Docker |
 | `MEMORY_RUNNER` | chosen by `hooks/runner.sh` | hooks only: the container if `.env` has `ANTHROPIC_API_KEY`, else `bin/memory` natively; set it to override |
 | `MEMORY_LLM` | `auto` | `sdk` / `cli` / `none` |
@@ -331,9 +331,10 @@ or a spent limit is the usual cause of exit 2; `echo 'Say OK' | claude -p --outp
 | `MEMORY_EMBED` | `none` | `voyage` (`VOYAGE_API_KEY`) or `openai` (`OPENAI_API_KEY`) |
 | `MEMORY_EMBED_MODEL` | the provider's | `voyage-3.5` for Voyage, `text-embedding-3-small` for OpenAI |
 | `MEMORY_HALF_LIFE` | `90` | days |
-| `MEMORY_MAX_LINES` | `150` | per compiled file; keep under Claude Code's 200-line import cap |
+| `MEMORY_MAX_LINES` | `150` | per compiled file; Claude Code advises keeping an instruction file under 200 lines, since a longer one costs context and adherence |
 | `MEMORY_MIN_SCORE` | `0.15` | archive below this |
 | `MEMORY_STATE_DIR` | `~/.local/share/memory-optimized-context` | where `memory status` and the nightly job keep and read `backfill.log` and `needs-attention` |
+| `MEMORY_UID`, `MEMORY_GID` | `10001` | Docker Compose only: the user and group the container runs as; on Linux set them to yours (see Docker above) |
 | `MEMORY_PYTHON` | this checkout's `.venv`, else `python3` | the nightly job's interpreter |
 | `CALLS`, `RETRY_WAIT` | `60`, `60` | the nightly job's Reflector-call budget, and the seconds it waits between tries while a hook holds the lock |
 

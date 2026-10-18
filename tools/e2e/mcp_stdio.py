@@ -5,16 +5,19 @@ import subprocess
 import sys
 
 signal.alarm(60)
-p = subprocess.Popen([sys.executable, sys.argv[1], "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+# Killed explicitly below: the script ends as soon as the answer is in.
+p = subprocess.Popen([sys.executable, sys.argv[1], "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,  # pylint: disable=consider-using-with
                      stderr=subprocess.DEVNULL, text=True)
 
 
 def send(o):
+    """Write one JSON-RPC message to the server."""
     p.stdin.write(json.dumps(o) + "\n")
     p.stdin.flush()
 
 
 def recv():
+    """Read lines until a JSON-RPC response (one with an id) arrives."""
     while True:
         line = p.stdout.readline()
         if not line:

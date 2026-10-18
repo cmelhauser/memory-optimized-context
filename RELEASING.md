@@ -66,8 +66,9 @@ The tagged commit must be on `main`; the release workflow refuses a tag that is 
 and the release workflow rejects lightweight tags:
 
 ```bash
-git tag -a v0.1.0 -m "v0.1.0: first cut. forty-six tests, coverage 89%, image python:3.12.6-slim-bookworm."
-git push origin v0.1.0
+# for example, with the real version, test count and image tag:
+git tag -a vX.Y.Z -m "vX.Y.Z: <what it is>. <N> tests, coverage 100%, image python:3.12.x-slim-bookworm."
+git push origin vX.Y.Z
 ```
 
 Pushing a tag runs `.github/workflows/release.yml`, which re-runs lint and the full test matrix,

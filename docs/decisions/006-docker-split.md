@@ -11,8 +11,8 @@ markdown store is a bind mount at the same path inside and out.
 The subscription-based `claude -p` Reflector is unavailable inside the container; the SDK is used
 there.
 
-**Would reopen it.** Running natively is fully supported via `MEMORY_RUNNER`; nothing is lost
-by choosing it.
+**Would reopen it.** Running natively is the default when `.env` has no key (see the amendment
+below), and `MEMORY_RUNNER` overrides either choice; nothing is lost by choosing it.
 
 **Amended 13 September 2026.** A container without an API key has no Reflector, so the hooks
 now default to the native install and reach for the container only when `.env` holds a key

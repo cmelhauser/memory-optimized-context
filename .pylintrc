@@ -1,0 +1,32 @@
+# Pylint configuration. CI requires a score of 10.00 over the code it covers (see tools/run_ci_locally.sh).
+#
+# The same stance as ruff.toml: catch defects, do not restyle. What is switched off is switched off for a reason
+# given beside it, and every other check runs with no exceptions.
+[MAIN]
+jobs = 1
+persistent = no
+fail-under = 10.0
+
+[FORMAT]
+max-line-length = 160            # the limit ruff.toml enforces
+
+[BASIC]
+# Test functions are named for the behaviour they pin down, which is their documentation; private helpers likewise.
+no-docstring-rgx = ^(test_|_)
+good-names = i, j, k, m, n, p, s, t, f, fh, e, db, c, r, v, x, d, id, ts, fn, rc, ok
+
+[MESSAGES CONTROL]
+disable =
+    # `bin/memory` is one file by design (README, "single-file"), of deliberately dense one-line statements.
+    too-many-lines,
+    multiple-statements,
+    # Complexity limits would split functions that are one pipeline read top to bottom; the tests, at 100% of
+    # branches, are what bound them.
+    too-many-locals, too-many-branches, too-many-statements, too-many-return-statements, too-many-arguments,
+    too-many-positional-arguments, too-many-instance-attributes, too-few-public-methods,
+    # Optional dependencies (anthropic, mcp, numpy) are imported where used so that a missing one costs only its feature.
+    import-outside-toplevel,
+    # pytest fixtures are used by naming them as parameters, which pylint reads as shadowing and as unused.
+    redefined-outer-name, unused-argument,
+    # `assert x == []` is how a test says the answer is an empty list rather than None or an empty string.
+    use-implicit-booleaness-not-comparison

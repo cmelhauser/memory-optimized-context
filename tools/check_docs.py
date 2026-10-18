@@ -12,6 +12,7 @@ Checks, each re-derived from the repository rather than trusted:
      example domains. The repository is public; contact details stay out of it.
 Exit 1 if any check failed, after printing every problem found.
 """
+import os
 import pathlib
 import re
 import subprocess
@@ -24,6 +25,7 @@ EMAIL_OK = re.compile(r"noreply@anthropic\.com|[\w.%+-]+@example\.(?:com|org|net
 
 
 def tracked_files():
+    """Every file git tracks; the whole tree, minus .git and caches, when this is not a git checkout (the container image)."""
     out = subprocess.run(["git", "-C", str(REPO), "ls-files"], capture_output=True, text=True, check=False)
     if out.returncode == 0 and out.stdout.strip():
         return [REPO / p for p in out.stdout.split()]
@@ -31,6 +33,7 @@ def tracked_files():
 
 
 def collected_tests():
+    """How many tests pytest collects; exits with pytest's own output if it collects none."""
     out = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q"], capture_output=True, text=True, cwd=REPO, check=False)
     m = re.search(r"(\d+) tests? collected", out.stdout) or re.search(r":\s*(\d+)\s*$", out.stdout.strip(), re.M)
     if not m:
@@ -39,26 +42,27 @@ def collected_tests():
 
 
 def main():
+    """Run every check, print each problem found and a one-line summary; exit status 1 if there were any."""
     errors = []
     n_tests = collected_tests()
     for name in PROSE:
-        text = (REPO / name).read_text()
+        text = (REPO / name).read_text(encoding="utf-8")
         for m in re.finditer(r"\b(\d+) tests\b", text):
             if int(m.group(1)) != n_tests:
                 errors.append(f"{name}: says {m.group(1)} tests, pytest collects {n_tests}")
         for m in re.finditer(r"\bcoverage gate (?:is |at )(\d+) per cent\b", text):
-            gate = re.search(r"fail_under\s*=\s*(\d+)", (REPO / ".coveragerc").read_text()).group(1)
+            gate = re.search(r"fail_under\s*=\s*(\d+)", (REPO / ".coveragerc").read_text(encoding="utf-8")).group(1)
             if m.group(1) != gate:
                 errors.append(f"{name}: says coverage gate {m.group(1)}, .coveragerc says {gate}")
 
-    version = re.search(r'^version:\s*"?([^"\n]+)"?', (REPO / "CITATION.cff").read_text(), re.M).group(1)
-    if f"## [{version}]" not in (REPO / "CHANGELOG.md").read_text():
+    version = re.search(r'^version:\s*"?([^"\n]+)"?', (REPO / "CITATION.cff").read_text(encoding="utf-8"), re.M).group(1)
+    if f"## [{version}]" not in (REPO / "CHANGELOG.md").read_text(encoding="utf-8"):
         errors.append(f"CHANGELOG.md has no section for CITATION.cff version {version}")
 
     for p in tracked_files():
         if p.suffix != ".md":
             continue
-        text = p.read_text(errors="ignore")
+        text = p.read_text(encoding="utf-8", errors="ignore")
         for m in re.finditer(r"\]\(([^)#\s]+)(?:#[^)]*)?\)", text):
             target = m.group(1)
             if re.match(r"^[a-z]+://|^mailto:", target):
@@ -70,7 +74,7 @@ def main():
     for p in tracked_files():
         if p.suffix in (".jpeg", ".jpg", ".png", ".svg", ".zip"):
             continue
-        for i, line in enumerate(p.read_text(errors="ignore").splitlines(), 1):
+        for i, line in enumerate(p.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
             if home.search(line):
                 errors.append(f"{p.relative_to(REPO)}:{i}: host-specific home path")
             for address in EMAIL.findall(line):
@@ -78,7 +82,7 @@ def main():
                     errors.append(f"{p.relative_to(REPO)}:{i}: email address")
 
     for e in errors:
-        print("::error::" + e if "GITHUB_ACTIONS" in __import__("os").environ else e)
+        print("::error::" + e if "GITHUB_ACTIONS" in os.environ else e)
     print(f"check_docs: {n_tests} tests, version {version}, {len(errors)} problem(s)")
     return 1 if errors else 0
 

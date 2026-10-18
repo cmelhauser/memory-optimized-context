@@ -9,6 +9,7 @@ LOG = sys.argv[2]
 
 
 def answer(prompt):
+    """The Reflector's reply to a prompt: no verdicts for a contradiction check, else one lesson naming the project."""
     if "CANDIDATES:" in prompt:
         return '{"same": [], "contradicts": []}'
     m = re.search(r"Default project for this conversation: (\S+)", prompt)
@@ -17,10 +18,13 @@ def answer(prompt):
 
 
 class Handler(BaseHTTPRequestHandler):
-    def do_POST(self):
+    """Answers POST /v1/messages the way the Messages API does, and logs what it was sent."""
+
+    def do_POST(self):  # pylint: disable=invalid-name  # the name http.server dispatches on
+        """Log the prompt and reply with a canned message."""
         body = json.loads(self.rfile.read(int(self.headers["content-length"])))
         prompt = body["messages"][0]["content"]
-        with open(LOG, "a") as f:
+        with open(LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps({"path": self.path, "key": self.headers.get("x-api-key"), "prompt": prompt}) + "\n")
         out = {"id": "msg_e2e", "type": "message", "role": "assistant", "model": body["model"],
                "content": [{"type": "text", "text": answer(prompt)}], "stop_reason": "end_turn",
@@ -33,7 +37,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def log_message(self, *a):
-        pass
+        """Keep the request log off stderr."""
 
 
 ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()

@@ -17,3 +17,7 @@ top k contains every substring. Start from `questions.example.jsonl` and grow it
 tools/eval_recall.py eval/questions.jsonl            # native
 docker exec memory python3 /app/eval_recall.py "$HOME/GitHub/memory-optimized-context/eval/questions.jsonl"   # Docker; ~/GitHub is mounted
 ```
+
+Flags: `-k N` (default 8) is how many results count, `--all` also searches archived and superseded
+lessons, and `--min R` makes the exit status 1 when recall is below `R` (default 0, so it only
+reports). It lists every question it missed.

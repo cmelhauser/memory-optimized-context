@@ -23,8 +23,8 @@ and deletes, run client-side. Claude Code's auto memory (v2.1.59, February 2026)
 `autoMemoryDirectory` relocates it; AutoDream consolidates it during idle periods.
 (https://code.claude.com/docs/en/memory)
 
-**Changed:** compiled output is markdown, capped at 150 lines per file to stay under the
-200-line import truncation. Native auto-memory directories are left alone, because AutoDream
+**Changed:** compiled output is markdown, capped at 150 lines per file, inside the 200 lines Claude Code
+advises for an instruction file (a longer one costs context and adherence; an `@` import has no line cap of its own). Native auto-memory directories are left alone, because AutoDream
 already writes there and a second writer would race it.
 
 ## Context collapse

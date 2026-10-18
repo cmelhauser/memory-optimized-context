@@ -15,6 +15,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 def load_memory():
+    """Import bin/memory as a module, from the checkout or from the image's /app."""
     candidates = [REPO / "bin" / "memory", pathlib.Path(__file__).resolve().parent / "memory"]   # the checkout, or the image's /app
     path = next((p for p in candidates if p.exists()), None)
     if path is None:
@@ -27,6 +28,7 @@ def load_memory():
 
 
 def recall(m, questions, k, include_archived):
+    """Run each question through `search`; return how many found an expected lesson, and the queries that did not."""
     hits = 0
     misses = []
     with m.db() as c:
@@ -40,13 +42,14 @@ def recall(m, questions, k, include_archived):
 
 
 def main(argv=None):
+    """Print recall@k for a question file; exit 1 if it is below --min."""
     ap = argparse.ArgumentParser()
     ap.add_argument("questions")
     ap.add_argument("-k", type=int, default=8)
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--min", type=float, default=0.0)
     a = ap.parse_args(argv)
-    questions = [json.loads(line) for line in pathlib.Path(a.questions).read_text().splitlines() if line.strip()]
+    questions = [json.loads(line) for line in pathlib.Path(a.questions).read_text(encoding="utf-8").splitlines() if line.strip()]
     if not questions:
         sys.exit("no questions")
     m = load_memory()

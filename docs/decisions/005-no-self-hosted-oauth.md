@@ -10,4 +10,5 @@ Drive connector already attached to the account.
 compile rather than instantly. Full web history is captured by monthly export.
 
 **Would reopen it.** Anthropic shipping a stable header-auth path for custom connectors, at
-which point `memory mcp --transport http` behind a tunnel is a one-line change.
+which point `memory mcp --transport http --allowed-host <tunnel name>` behind a tunnel is a
+short change (the server has no authentication of its own).

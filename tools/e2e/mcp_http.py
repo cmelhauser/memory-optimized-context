@@ -10,15 +10,16 @@ INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "e2e", "version": "0"}}}
 
 
-def post(obj, sid=None):
+def post(obj, session=None):
+    """POST one JSON-RPC message; return the session id and the messages in the reply (JSON or an event stream)."""
     h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
-    if sid:
-        h["Mcp-Session-Id"] = sid
+    if session:
+        h["Mcp-Session-Id"] = session
     with urllib.request.urlopen(urllib.request.Request(URL, json.dumps(obj).encode(), h), timeout=10) as r:
         body = r.read().decode()
-        sid = r.headers.get("mcp-session-id") or sid
+        session = r.headers.get("mcp-session-id") or session
     msgs = [json.loads(line[5:]) for line in body.splitlines() if line.startswith("data:")]
-    return sid, msgs or ([json.loads(body)] if body.strip() else [])
+    return session, msgs or ([json.loads(body)] if body.strip() else [])
 
 
 if sys.argv[1:] == ["wait"]:

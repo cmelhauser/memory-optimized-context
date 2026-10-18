@@ -49,6 +49,10 @@ jobs:
       - name: Python lint
         run: ruff check --output-format=github .
 
+      # `fail-under` in .pylintrc makes anything under 10.00 a failure; the locked tools include the packages the code imports.
+      - name: Pylint
+        run: pylint bin/memory tools tests
+
       - name: Lint the workflows
         run: actionlint .github/workflows/*.yml
 

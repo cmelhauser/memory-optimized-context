@@ -29,7 +29,21 @@ Subcommands (`memory COMMAND --help` for every flag):
             or --transport http, on 127.0.0.1 unless --host (Claude Code: claude mcp add --transport http memory
             http://127.0.0.1:8765/mcp)
 """
-import argparse, hashlib, html, json, math, os, re, shutil, sqlite3, subprocess, sys, tempfile, threading, time, urllib.request
+import argparse
+import hashlib
+import html
+import json
+import math
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.request
 from array import array
 from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta, timezone
@@ -49,7 +63,8 @@ CFG = {
     "min_score": float(os.environ.get("MEMORY_MIN_SCORE", "0.15")),
     "transcript_chars": 30000,
 }
-def NOW():
+def NOW():  # pylint: disable=invalid-name  # upper case on purpose: a clock the tests replace, read like a constant
+    """The current UTC time as an ISO-8601 string to the second; every stored timestamp comes from here."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 SLUG_MAX = 64                                      # `compile_` makes a slug a filename, and the OS refuses a long one
 SLUG = rf"[a-z0-9][a-z0-9._-]{{0,{SLUG_MAX - 1}}}"
@@ -90,6 +105,9 @@ def as_project(value, default):
 
 
 def log(*a):
+
+
+    """Write one line to stderr, where every hook and cron job's output is collected into hook.log."""
     print("[memory]", *a, file=sys.stderr)
 
 
@@ -116,15 +134,16 @@ class Lock:
         self.token = f"{os.getpid()}:{time.time_ns()}"
     def owner(self):
         """The token inside the lock, or None if there is no lock or it is being written right now."""
-        try: return (LOCK / "owner").read_text()
+        try: return (LOCK / "owner").read_text(encoding="utf-8")
         except OSError: return None
     def mine(self):
+        """Whether this process still holds the lock: its token is the one stamped in `.lock/owner`."""
         return self.owner() == self.token
     def take(self):
         """Create the lock and stamp it. False when another writer already holds it."""
         try: LOCK.mkdir()
         except FileExistsError: return False
-        (LOCK / "owner").write_text(self.token)
+        (LOCK / "owner").write_text(self.token, encoding="utf-8")
         return True
     def crashed_holders_lock(self):
         """Remove a lock nobody has touched for LOCK_STALE, under `.lock.break` so only one writer can do it. The
@@ -185,15 +204,18 @@ def db():
     finally: c.close()
 
 def connect():
+    """Open the database (creating the store's directories and schema on first use), with WAL and rows addressable by name."""
     ROOT.mkdir(parents=True, exist_ok=True); DB.parent.mkdir(parents=True, exist_ok=True)
     c = sqlite3.connect(DB, timeout=30)
     c.execute("PRAGMA journal_mode=WAL"); c.executescript(SCHEMA); c.row_factory = sqlite3.Row
     return c
 
 def norm(t):
+    """A lesson's text as it is compared: lower case, whitespace collapsed, no trailing full stop."""
     return re.sub(r"\s+", " ", t.strip().lower().rstrip("."))
 
 def lid(project, text):
+    """The lesson's id: the first ten hex digits of a hash of its project and normalised text. Changing this changes what every store means."""
     return hashlib.sha1(f"{project}|{norm(text)}".encode()).hexdigest()[:10]
 
 SEEN = {"at": None}   # when what is being read was written; None is now, as for a Stop hook's turn
@@ -231,6 +253,7 @@ def upsert(c, project, text):
     return i, True
 
 def score(r, now_ts=None):
+    """How much a lesson weighs now: its net votes (a harmful vote counts double), halved for every `half_life_days` since it was last seen."""
     now_ts = now_ts or time.time()
     last = datetime.fromisoformat(r["last_seen"]).timestamp()
     age = max(0.0, (now_ts - last) / 86400)
@@ -253,7 +276,6 @@ def no_answer(why):
     """Log why a call gave nothing and keep the reason. An unattended run's last line is often all the operator
     ever sees, so it has to name the cause: an expired login reads nothing like a spent budget."""
     log(why); REFLECTOR["why"] = why
-    return None
 
 def cli_reason(r):
     """The reason a `claude -p` call failed. The CLI reports it in `result`, at the end of a JSON object whose head
@@ -278,7 +300,7 @@ def llm(prompt, system="You are a precise assistant. Output only what is asked."
             return "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
         except ImportError:
             if mode == "sdk": raise SystemExit("pip install anthropic") from None
-        except Exception as e:                      # API, rate-limit or network error; auto mode tries the CLI next
+        except Exception as e:  # pylint: disable=broad-exception-caught  # any API, rate-limit or network error; auto mode tries the CLI next
             no_answer(f"the SDK call failed: {str(e)[:300]}")
             if mode == "sdk": return None
     if mode in ("auto", "cli") and shutil.which("claude"):
@@ -362,6 +384,7 @@ def embed(texts):
 _dot = getattr(math, "sumprod", None) or (lambda x, y: sum(map(float.__mul__, x, y)))   # sumprod is 3.12+, ~10x faster
 
 def cosine(a, b):
+    """Cosine similarity of two float32 vectors given as bytes; 0.0 when either is empty or they differ in length."""
     x, y = array("f"), array("f"); x.frombytes(a); y.frombytes(b)
     if not x or not y or len(x) != len(y): return 0.0
     na, nb = math.sqrt(_dot(x, x)), math.sqrt(_dot(y, y))
@@ -371,14 +394,15 @@ def vector_rank(qe, rows, top=30):
     """Rows sorted by cosine to qe. numpy if present (one matmul), else the stdlib path."""
     try:
         import numpy as np
-        M = np.frombuffer(b"".join(r["embedding"] for r in rows), dtype=np.float32).reshape(len(rows), -1)
+        mat = np.frombuffer(b"".join(r["embedding"] for r in rows), dtype=np.float32).reshape(len(rows), -1)
         q = np.frombuffer(qe, dtype=np.float32)
-        sims = (M @ q) / (np.linalg.norm(M, axis=1) * np.linalg.norm(q) + 1e-9)
+        sims = (mat @ q) / (np.linalg.norm(mat, axis=1) * np.linalg.norm(q) + 1e-9)
         return [rows[i] for i in np.argsort(-sims)[:top]]
     except (ImportError, ValueError):
         return sorted(rows, key=lambda r: -cosine(qe, r["embedding"]))[:top]
 
 def embed_missing(c):
+    """Embed every active lesson that has no vector yet; a no-op without an embedding provider."""
     rows = c.execute("SELECT id,text FROM lessons WHERE embedding IS NULL AND state='active'").fetchall()
     if not rows or CFG["embed"] == "none": return
     for r, e in zip(rows, embed([r["text"] for r in rows]), strict=True):
@@ -395,6 +419,9 @@ def fts_query(q):
 SEARCH_K_MAX, QUERY_MAX = 100, 1000   # a negative k sliced from the end; a query of 300,000 tokens took 106 s
 
 def search(c, q, project=None, k=8, include_archived=False):
+    """Rank active lessons for a query by reciprocal-rank fusion of FTS5 (BM25) and, when embeddings are on, vector similarity.
+
+    `project` also admits the `all` lessons; `include_archived` adds archived and superseded ones but never merged duplicates."""
     k, q = max(1, min(int(k), SEARCH_K_MAX)), str(q)[:QUERY_MAX]
     where = " AND l.state!='merged'" if include_archived else " AND l.state='active'"
     pw, pa = ("", ()) if not project else (" AND l.project IN (?, 'all')", (project.lower(),))
@@ -481,6 +508,7 @@ def reflect(text, default_project, known_projects):
     return list({(p, norm(t)): (p, t) for p, t in found if t}.values())   # one vote per lesson an answer repeats
 
 def known_projects(c):
+    """Every project slug the store holds lessons for."""
     return {r[0] for r in c.execute("SELECT DISTINCT project FROM lessons")}
 
 
@@ -582,6 +610,7 @@ def apply_verdict(c, r, cands, out):
             if old == r["id"]: return    # this lesson lost: it supersedes nothing else, being no longer active itself
 
 def owe_check(c, lesson_id):
+    """Record that a contradiction check is owed to a lesson, for the next `learn` to pay; always False, the value of a check that was not made."""
     set_cursor(c, RECHECK + lesson_id, "owed")
     return False
 
@@ -611,7 +640,7 @@ def journal_write(lines, role="manual"):
         p = d / f"{time.time_ns() + n}-{os.getpid()}-{role}.md"
         part = p.with_name(p.name + ".part")
         try:
-            with open(part, "x") as f: f.write("\n".join(lines) + "\n")
+            with open(part, "x", encoding="utf-8") as f: f.write("\n".join(lines) + "\n")
             os.link(part, p)
             return p
         except FileExistsError: continue
@@ -626,7 +655,7 @@ def ingest_journal(c):
         key = f"journal:{p.relative_to(JOURNAL)}"
         if key in seen: continue
         with seen_at(p.stat().st_mtime):
-            for line in p.read_text(errors="ignore").splitlines():
+            for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
                 m = LESSON_RE.match(line.strip())
                 if m: new.append(upsert(c, m.group(1), m.group(2)))
         c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, "", NOW()))
@@ -721,15 +750,16 @@ HOOK_WINDOWS = 2   # a Stop hook reflects at most this many windows, oldest firs
                    # stop inside a long turn: the cursor says how many of its pieces are done (`offset+k`)
 
 def inside_turn(offset, k):
+    """The cursor for a turn longer than a window: the byte offset where it starts, and how many of its pieces are done."""
     return f"{offset}+{k}"
 
 def ingest_transcript(c, path, project, backfill=False):
-    path = os.path.abspath(path)           # one cursor however the path is spelled, `tr/s.jsonl` or `../tr/s.jsonl`
     """Reflect a transcript from its cursor, window by window, moving the cursor after each, so a ReflectorFailed
     part-way costs none of the windows already reflected. A backfill reads every window. A Stop hook reads at most
     HOOK_WINDOWS, oldest first: a stop follows every turn, so that is usually one call, and a session whose earlier
     stops could not get the lock is caught up by its next stops or a backfill, never skipped. A turn cut across
     windows moves the cursor piece by piece (`offset+k`), so a failure inside it costs none of the pieces answered."""
+    path = os.path.abspath(path)           # one cursor however the path is spelled, `tr/s.jsonl` or `../tr/s.jsonl`
     key = f"transcript:{path}"
     start, skip = split_cursor(cursor(c, key))
     turns, end = transcript_turns(path, start)
@@ -803,7 +833,7 @@ def ingest_export(c, path):
     Gemini Apps activity from Google Takeout. None of the three has an API for a person's own chats. `learn --all`
     reads every `*.json` in `exports/`, so any other file there, a truncated download included, is logged and skipped:
     the manifest that comes with a claude.ai export used to stop every run with an AttributeError."""
-    try: data = json.loads(Path(path).read_text())
+    try: data = json.loads(Path(path).read_text(encoding="utf-8"))
     except ValueError: data = None
     read = {"claude-ai": ingest_claude_ai, "chatgpt": ingest_chatgpt, "gemini": ingest_gemini}.get(export_kind(data))
     if read: return read(c, data)
@@ -955,7 +985,9 @@ def split_tagged(text, allowed=None):
         else: rest.append(line)
     return tagged, ("\n".join(rest).strip() if any(line.strip() for line in rest) else "")
 
-def sha(text): return hashlib.sha1(text.encode(errors="ignore")).hexdigest()[:12]
+def sha(text):
+    """A short content hash, for noticing that a doc changed."""
+    return hashlib.sha1(text.encode(errors="ignore")).hexdigest()[:12]
 
 def lesson_line(project, text):
     """A journal line for one remembered lesson, or (None, why not). The journal is read back with LESSON_RE, so a
@@ -967,10 +999,12 @@ def lesson_line(project, text):
     return f"[{p}] {t}", None
 
 def cursor(c, key):
+    """Where a source was read up to, or None if it never was."""
     r = c.execute("SELECT cursor FROM sources WHERE key=?", (key,)).fetchone()
     return r["cursor"] if r else None
 
 def set_cursor(c, key, value):
+    """Move a source's cursor; the caller commits."""
     c.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (key, value, NOW()))
 
 def reflect_batches(c, chunks, project, label, done=lambda name: None):
@@ -996,6 +1030,7 @@ def reflect_batches(c, chunks, project, label, done=lambda name: None):
     return new
 
 def git(repo, *args):
+    """Run git in a repository and return its stdout, decoded leniently; empty when git fails."""
     # A commit message in latin-1, which git stores as it was written, would raise at the strict decoding `text=True`
     # means, and every `learn --repo` of that repository would die there for good.
     r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
@@ -1011,6 +1046,7 @@ def inside(f, root):
     return f.is_file() and not f.is_symlink() and f.resolve().is_relative_to(root.resolve()) and f.stat().st_size <= 2_000_000
 
 def repo_slug(path):
+    """The project slug for a repository: its top-level directory's name, slugified."""
     top = git(path, "rev-parse", "--show-toplevel").strip() or str(path)
     return slugify(Path(top).name)
 
@@ -1024,7 +1060,7 @@ def take_docs(c, files, key_of, name_of, allowed=None):
     `allowed` limits which projects its tagged lines may name."""
     new, prose, pending = [], [], {}
     for f in files:
-        text = f.read_text(errors="ignore"); key = key_of(f); h = sha(text); cur = cursor(c, key)
+        text = f.read_text(encoding="utf-8", errors="ignore"); key = key_of(f); h = sha(text); cur = cursor(c, key)
         if cur == h: continue
         tagged, rest = split_tagged(text, allowed)
         if cur != f"tagged:{h}":
@@ -1183,6 +1219,7 @@ def transcript_sources(root=None, extra=None):
     for d in extra or []: yield from loose_transcripts(Path(d).expanduser(), Path(d).name.lower())
 
 def learn_transcripts(c, root=None, extra=None):
+    """Reflect every transcript source from its cursor, returning the lessons upserted. A failure part-way carries what was done."""
     new = []
     with carrying(new):
         for slug, files in transcript_sources(root, extra):
@@ -1190,6 +1227,7 @@ def learn_transcripts(c, root=None, extra=None):
     return new
 
 def learn_all(c, repos_root=None, notes=None, exports=None):
+    """Everything `learn --all` reads: transcripts, each git repository under `repos_root`, the notes folder and the exports."""
     new = []
     with carrying(new):
         new += learn_transcripts(c)
@@ -1203,6 +1241,8 @@ def learn_all(c, repos_root=None, notes=None, exports=None):
 
 # ---------------------------------------------------------------- compile + prune
 def prune(c):
+    """Archive the active lessons that fell below `min_score` or were voted harmful twice, appending them to this month's archive file.
+    Returns how many were archived."""
     now = time.time(); archived = []
     for r in c.execute("SELECT * FROM lessons WHERE state='active'").fetchall():
         if r["harmful"] >= 2 or score(r, now) < CFG["min_score"]:
@@ -1210,18 +1250,22 @@ def prune(c):
     if archived:
         ARCHIVE.mkdir(exist_ok=True)
         month = ARCHIVE / f"{datetime.now():%Y-%m}.md"
-        have = month.read_text() if month.exists() else ""
-        with open(month, "a") as f:
+        have = month.read_text(encoding="utf-8") if month.exists() else ""
+        with open(month, "a", encoding="utf-8") as f:
             for r in archived:
                 if f"<!-- {r['id']} " in have: continue      # met again from an old source and re-archived: one line
                 f.write(f"- [{r['project']}] {r['text']}  <!-- {r['id']} votes={r['votes']} last={r['last_seen'][:10]} -->\n")
     return len(archived)
 
 def atomic_write(path, text):
+    """Write a file so that a reader sees the old text or the new, never half: to a `.tmp` sibling, then `os.replace`."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp"); tmp.write_text(text); os.replace(tmp, path)
+    tmp = path.with_suffix(path.suffix + ".tmp"); tmp.write_text(text, encoding="utf-8"); os.replace(tmp, path)
 
 def compile_(c):
+    """Prune, then write `compiled/PLAYBOOK.md` and one file per project from the active lessons, best first and within `max_lines`.
+
+    Returns (active lessons, pruned)."""
     n_pruned = prune(c)
     rows = c.execute("SELECT * FROM lessons WHERE state='active'").fetchall()
     now = time.time(); rows.sort(key=lambda r: -score(r, now))
@@ -1280,7 +1324,7 @@ def cmd_hook(a):
     asked without the lock: the hook takes it twice, briefly, to write what it read and then what the contradiction
     checks found, so a stop no longer makes every other stop wait on its calls."""
     if os.environ.get("MEMORY_REFLECT"): return          # we are inside our own `claude -p`; do nothing
-    j = json.loads(Path(a.input).read_text()) if a.input else json.load(sys.stdin)
+    j = json.loads(Path(a.input).read_text(encoding="utf-8")) if a.input else json.load(sys.stdin)
     msg = j.get("last_assistant_message", "") or ""
     lines = [ln.strip() for ln in msg.split("LESSONS:", 1)[1].splitlines() if LESSON_RE.match(ln.strip())] if "LESSONS:" in msg else []
     journal_write(lines, a.role)
@@ -1315,6 +1359,7 @@ def stop_early(cmd, why):
     sys.exit(1 if BUDGET["answered"] else 2)
 
 def cmd_ingest(a):
+    """`memory ingest`: fold in the journal and optionally one transcript or export, then compile."""
     BUDGET.update(used=0, answered=0)
     with Lock(a.wait), db() as c:
         new = ingest_journal(c)
@@ -1351,16 +1396,19 @@ def cmd_learn(a):
     if failed: stop_early("learn", failed[0])
 
 def cmd_compile(a):
+    """`memory compile`: embed what lacks a vector, then prune and write `compiled/`."""
     with Lock(), db() as c:
         embed_missing(c); n, p = compile_(c); c.commit()
     log(f"compile: {n} active, {p} pruned")
 
 def cmd_search(a):
+    """`memory search`: print the best matches, one per line."""
     with db() as c:
         for r in search(c, a.query, a.project, a.k, a.all):
             print(f"{r['id']}  ({r['votes']}) [{r['project']}] {r['text']}")
 
 def cmd_remember(a):
+    """`memory remember`: journal one lesson by hand and fold it in; if the lock is busy, the journal file waits for the next ingest."""
     line, why = lesson_line(a.project, a.text)
     if why: sys.exit(f"memory: nothing was saved: {why}")
     p = journal_write([line], "manual")
@@ -1370,7 +1418,8 @@ def cmd_remember(a):
     except LockBusy:
         # Not an error: the lesson is in the journal, and the next ingest folds it in. Saying "try again" made a retry
         # write a second file, and the lesson a second vote.
-        return log(f"remembered → {p.name}; the store is busy, so the next ingest folds it in. Do not run this again.")
+        log(f"remembered → {p.name}; the store is busy, so the next ingest folds it in. Do not run this again.")
+        return
     log(f"remembered → {p.name}")
 
 HOOK_HEAD = re.compile(r"^== (\d{4}-\d\d-\d\d)T\S+ (stop|session start)\b")
@@ -1382,7 +1431,7 @@ def hook_health(path, days=7):
     dated `== time what` line, and (Reflector calls, dollars) the hooks logged. The lines beneath a run belong to it;
     those before the first dated line are undated."""
     since, runs, held, kind, spend_ = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d"), {}, {}, None, [0, 0.0]
-    for line in Path(path).read_text(errors="replace").splitlines() if Path(path).exists() else []:
+    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines() if Path(path).exists() else []:
         m = HOOK_HEAD.match(line)
         if m:
             kind = m[2] if m[1] >= since else None
@@ -1409,11 +1458,11 @@ def cmd_status(a):
     print(f"owed       {owed} contradiction check(s)" + (": the next `learn` pays them" if owed else ""))
     print("lock       " + ("held: a `learn` or a hook is writing" if LOCK.exists() else "free"))
     state = Path(os.environ.get("MEMORY_STATE_DIR") or Path.home() / ".local" / "share" / "memory-optimized-context")
-    nightly = [ln for ln in (state / "backfill.log").read_text(errors="replace").splitlines() if "nightly catch-up" in ln] \
+    nightly = [ln for ln in (state / "backfill.log").read_text(encoding="utf-8", errors="replace").splitlines() if "nightly catch-up" in ln] \
         if (state / "backfill.log").exists() else []
     print("nightly    " + (nightly[-1].removeprefix("== ") if nightly else "no run logged"))
     if (state / "needs-attention").exists():
-        print("ALERT      " + " ".join((state / "needs-attention").read_text().split())[:200] + f"  ({state / 'backfill.log'})")
+        print("ALERT      " + " ".join((state / "needs-attention").read_text(encoding="utf-8").split())[:200] + f"  ({state / 'backfill.log'})")
     runs, held, (calls, dollars) = hook_health(ROOT / "hook.log")
     if runs:
         print("hooks      last 7 days: " + ", ".join(f"{n} {k} runs, {held.get(k, 0)} lost the lock" for k, n in sorted(runs.items())))
@@ -1422,6 +1471,7 @@ def cmd_status(a):
         print("hooks      no dated runs in the last 7 days (hook.log is dated from 0.2.1)")
 
 def cmd_vote(a):
+    """`memory vote`: add a helpful or harmful vote to a lesson; a second harmful vote archives it at once."""
     col = "helpful" if a.helpful else "harmful"
     with Lock(), db() as c:
         voted = c.execute(f"UPDATE lessons SET {col}={col}+1 WHERE id=?", (a.id,)).rowcount
@@ -1484,12 +1534,16 @@ def cmd_mcp(a):
         return "ok" if voted else f"no lesson has id {lesson_id}"
 
     if a.transport == "http":
-        srv.run(transport="streamable-http", host=a.host, port=a.port, **sec) if v2 else srv.run(transport="streamable-http")
+        if v2: srv.run(transport="streamable-http", host=a.host, port=a.port, **sec)
+        else: srv.run(transport="streamable-http")
     else:
         srv.run(transport="stdio")
 
 
 def main():
+
+
+    """Parse the command line and run the chosen subcommand."""
     ap = argparse.ArgumentParser(prog="memory", description="Long-term memory for Claude: learn lessons from sessions, "
                                  "repositories, notes and exports; compile them for every session to read.")
     sp = ap.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
