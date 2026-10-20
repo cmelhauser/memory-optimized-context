@@ -7,8 +7,13 @@ the journal line format stable.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-20
+
+A patch: tooling, documentation and refreshed pins. Nothing in the store's schema, `lid()` or the journal format changed.
+
 ### Changed
 
+- The hashed locks are refreshed (httpx2 and httpcore2 2.15.1, starlette 1.9.0, platformdirs 4.13.5), and `actions/attest` is 4.2.2.
 - Pylint is a second gate beside ruff: `.pylintrc` requires 10.00 over `bin/memory`, `tools/` and `tests/`, in CI's lint job and in `tools/run_ci_locally.sh`, and pins `pylint` in `requirements-dev.txt`. What the configuration switches off is each given a reason in the file. Every function in the tool and the scripts now has a docstring, and a docstring that had been left under a statement in `ingest_transcript` is where it belongs.
 - Every text file the tool reads or writes is opened as UTF-8 by name, instead of by the machine's locale, so what is written is the same on every host.
 - The release workflow signs each platform's SBOM with `actions/attest`, which replaces the deprecated `actions/attest-sbom`; `RELEASING.md` says what to do when signing hits a Rekor timeout (re-run the failed job). `test_workflows_pin_actions_by_commit_and_only_the_publish_job_writes_packages` covers the workflow.
