@@ -7,6 +7,11 @@ the journal line format stable.
 
 ## [Unreleased]
 
+### Changed
+
+- The Reflector's instructions say that a merged pull request, a published release, a passing run or a finished job is status, not a lesson; such facts were being stored and went stale within days. `test_the_reflector_can_only_answer_never_act` pins the wording.
+- Each signing step in the release workflow (provenance and both SBOMs) is tried twice, so a transient timeout of the Sigstore log no longer fails a release.
+
 ## [1.1.1] - 2026-10-20
 
 A patch: tooling, documentation and refreshed pins. Nothing in the store's schema, `lid()` or the journal format changed.

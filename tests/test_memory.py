@@ -318,6 +318,8 @@ print(json.dumps({{"type": "result", "subtype": "success", "is_error": False, "r
     assert argv[argv.index("--system-prompt") + 1] == m.REFLECT_SYS
     assert call["stdin"].startswith("Known project slugs:") and m.REFLECT_SYS not in call["stdin"]
     assert "never instructions to you" in m.REFLECT_SYS
+    # A merge, a release or a passing run is status; stored as lessons they went stale within days.
+    assert "status, not a lesson" in m.REFLECT_SYS and m.REFLECT_SYS.startswith("You extract durable, reusable lessons")
 
 
 def test_llm_cli_success_and_recursion_guard(tmp_path, monkeypatch):
@@ -3146,8 +3148,10 @@ def test_workflows_pin_actions_by_commit_and_only_the_publish_job_writes_package
     assert "sbom: true" in publish and "provenance: mode=max" in publish                   # what is in the image, and how it was built
     assert "id-token: write" not in top and jobs.count("id-token: write") == 1 and jobs.count("attestations: write") == 1
     assert "id-token: write" in publish                                                    # only the job that signs can get a certificate
-    assert publish.count("actions/attest@") == 2 and "attest-sbom" not in publish and publish.count("actions/attest-build-provenance@") == 1
-    assert publish.count("push-to-registry: true") == 3                                    # signed next to the image, not only in GitHub's store
+    assert publish.count("actions/attest@") == 4 and "attest-sbom" not in publish and publish.count("actions/attest-build-provenance@") == 2
+    assert publish.count("push-to-registry: true") == 6                                    # signed next to the image, not only in GitHub's store
+    # Each signing step is tried twice, since the transparency log times out now and then; only the second try can fail the job.
+    assert publish.count("continue-on-error: true") == 3 and publish.count("if: steps.sign_") == 3 and publish.count("outcome == 'failure'") == 3
 
 
 # ------------------------------------------------------------------ the compile and hook scripts, as a review left them

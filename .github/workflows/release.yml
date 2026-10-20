@@ -124,6 +124,16 @@ jobs:
       # signed with a short-lived Sigstore certificate bound to this workflow run, and recorded in GitHub's attestation
       # store and next to the image. `gh attestation verify oci://ghcr.io/<repo>:<tag> --repo <repo>` checks one.
       - name: Sign the build provenance
+        id: sign_provenance
+        continue-on-error: true   # the Sigstore log (rekor.sigstore.dev) times out now and then; the retry below is the verdict
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Sign the build provenance (retry)
+        if: steps.sign_provenance.outcome == 'failure'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-name: ghcr.io/${{ github.repository }}
@@ -146,6 +156,17 @@ jobs:
           done
 
       - name: Sign the amd64 SBOM
+        id: sign_sbom_amd64
+        continue-on-error: true   # the Sigstore log (rekor.sigstore.dev) times out now and then; the retry below is the verdict
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.sbom.outputs.amd64 }}
+          sbom-path: sbom-amd64.spdx.json
+          push-to-registry: true
+
+      - name: Sign the amd64 SBOM (retry)
+        if: steps.sign_sbom_amd64.outcome == 'failure'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
         with:
           subject-name: ghcr.io/${{ github.repository }}
@@ -154,6 +175,17 @@ jobs:
           push-to-registry: true
 
       - name: Sign the arm64 SBOM
+        id: sign_sbom_arm64
+        continue-on-error: true   # the Sigstore log (rekor.sigstore.dev) times out now and then; the retry below is the verdict
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.sbom.outputs.arm64 }}
+          sbom-path: sbom-arm64.spdx.json
+          push-to-registry: true
+
+      - name: Sign the arm64 SBOM (retry)
+        if: steps.sign_sbom_arm64.outcome == 'failure'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
         with:
           subject-name: ghcr.io/${{ github.repository }}

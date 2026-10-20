@@ -78,8 +78,8 @@ attached to it as BuildKit attestations, and signs the provenance and each platf
 verify`). It cannot make a bad
 tag good, but it records publicly whether the claim held.
 
-If the publish job fails at a signing step with a Rekor (`rekor.sigstore.dev`) network timeout, the
-transparency log was briefly unreachable and nothing is wrong with the tag: re-run the failed job
+Each signing step is tried twice, since the Sigstore log (`rekor.sigstore.dev`) times out now and then. If both
+tries fail the log was unreachable for a while and nothing is wrong with the tag: re-run the failed job
 (`gh run rerun <id> --failed`), then verify with `gh attestation verify`.
 
 ---
