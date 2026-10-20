@@ -339,13 +339,21 @@ h11==0.16.0 ; sys_platform != 'emscripten' \
     # via
     #   httpcore2
     #   uvicorn
-httpcore2==2.13.1 ; sys_platform != 'emscripten' \
-    --hash=sha256:e0aa977abe17e69a3b820a24542a6fa88702676d83880b8d194dcd18408e5103 \
-    --hash=sha256:e1e05d4f25f7d7d496bfb96748f6f4b67657b03da069b3a68c36069f3db73d0a
+httpcore2==2.14.0 ; python_full_version < '3.11' and sys_platform != 'emscripten' \
+    --hash=sha256:4c4f64f4b544afeb778c42c0ffb5941b29e671157e90ed3f6dc787c4bca90cd1 \
+    --hash=sha256:4f57a1a8249fe6af589d935cfd456f1d13bbdcb0f0fc72af9142368fc94811d7
     # via httpx2
-httpx2==2.13.1 \
-    --hash=sha256:6dff50fabc270ee5fd25d845d0b078ed20564579744d6d962850975996d2f9a4 \
-    --hash=sha256:e48744a19e3af5ee48313d0ce5fe941d5422fae5705ea922a4aabf94d7800dfa
+httpcore2==2.15.1 ; python_full_version >= '3.11' and sys_platform != 'emscripten' \
+    --hash=sha256:730f603058c260a3288378217b464713350c23e3b8fe8bba753701054032d98a \
+    --hash=sha256:a94b6b3e6260e1a3f035915408d3dcd7dc8e844c2b544b642e227cf98a747af0
+    # via httpx2
+httpx2==2.14.0 ; python_full_version < '3.11' \
+    --hash=sha256:47ad61a3c40282cd8d0dc96311531f00f5bfc71a066c6fe3b36d8f63fb9e4f6e \
+    --hash=sha256:9d20c13a10bae1773a0be3b0f1e5beeb4bdd549bc3a2ba18efa32897c65403e4
+    # via mcp
+httpx2==2.15.1 ; python_full_version >= '3.11' \
+    --hash=sha256:75841cd83d16b417f7d6da8f2089ce8120806efdbf96af37d46c5129c49015be \
+    --hash=sha256:ff75485308fbe441e75b1218546e4e78d884df41e1a9741c1f79335ed8fcfef7
     # via mcp
 httpx2-jsfetch==1.0 ; python_full_version >= '3.12' and sys_platform == 'emscripten' \
     --hash=sha256:70a0e3eabfef7cce5ad9c629f7d01ca05e418f586646f4ddf14782e4c1454c60 \
@@ -635,9 +643,9 @@ platformdirs==4.12.4 ; python_full_version < '3.11' \
     --hash=sha256:63743c02414e755de4e31b8f68125c1407495b86c5a006e203c01ff8b9924250 \
     --hash=sha256:78bfb9db2a8471ed7eebe3c3c932da413911042994e699b384fbb4493fa872d7
     # via pylint
-platformdirs==4.13.4 ; python_full_version >= '3.11' \
-    --hash=sha256:502ce08e9d36cf90579ee44e1e764838842fa658e4975ef47344fd053011d2c8 \
-    --hash=sha256:dd96496961684a7f42041923f842ec7494e09f5e87aded99117e1109cd40570e
+platformdirs==4.13.5 ; python_full_version >= '3.11' \
+    --hash=sha256:05831adf87d392760f4b5c3a0a95579ab5a10b18b9b9bd43680dcb47544788a0 \
+    --hash=sha256:53d3ec4280b815c1e0b02edad7f9ee8fda1ba9c0865dd9c2e6e63849ce82fc1e
     # via pylint
 pluggy==1.7.0 \
     --hash=sha256:7dd7b0d8832ba3cb632c306926ded123429211b83641b35dc5c41ad2d34f9bec \
@@ -1137,9 +1145,9 @@ starlette==1.7.0 ; python_full_version < '3.11' \
     # via
     #   mcp
     #   sse-starlette
-starlette==1.8.0 ; python_full_version >= '3.11' \
-    --hash=sha256:1565dc0b35d5737a271ed1e0e04e949f4e81198799f216d2667b0a0fb9cf9522 \
-    --hash=sha256:dfdd6b29c26483288088d990eee59631dedadd66ce20d203402a7ca8e3c4656f
+starlette==1.9.0 ; python_full_version >= '3.11' \
+    --hash=sha256:3d931de246ed870e35ce605974440816ef895e592f255d1396cfdf191d4c4318 \
+    --hash=sha256:fd3f159936e882d06c1108f84688f7cda2cf85fc6a592a50edbd175e882c2ddc
     # via
     #   mcp
     #   sse-starlette
