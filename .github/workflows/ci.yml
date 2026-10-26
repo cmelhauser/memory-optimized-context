@@ -5,7 +5,7 @@ name: CI
 # again (it is the same commit). `workflow_dispatch` is for a branch with no pull request.
 #
 # `lint` is its own job so a style failure reads as a style failure and reports in seconds. The ruleset
-# catches defects rather than restyling code; ruff.toml lists the rules. The documentation check
+# catches defects rather than restyling code; ruff.toml lists the rules, and .pylintrc holds pylint to 10.00. The documentation check
 # (tools/check_docs.py) runs inside pytest, so a stale count in the README fails the unit tests.
 #
 # `unit-tests` runs pytest on the floor the tool declares (3.10), the Python the Docker image runs (3.12) and
@@ -51,7 +51,7 @@ jobs:
 
       # `fail-under` in .pylintrc makes anything under 10.00 a failure; the locked tools include the packages the code imports.
       - name: Pylint
-        run: pylint bin/memory tools tests
+        run: pylint bin/memory tools tests tools/e2e/bin/claude
 
       - name: Lint the workflows
         run: actionlint .github/workflows/*.yml

@@ -24,13 +24,17 @@ export GIT_AUTHOR_NAME=e2e GIT_AUTHOR_EMAIL=e2e@local GIT_COMMITTER_NAME=e2e GIT
 DC=(env HOME="$W/h4" DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}" docker compose -p memory-e2e -f "$W/compose/docker-compose.yml")
 pass=0; fail=0
 
+# name status: print PASS or FAIL for one check, and count it
 verdict() { if [ "$2" -eq 0 ]; then echo "PASS $1"; pass=$((pass + 1)); else echo "FAIL $1"; fail=$((fail + 1)); fi; }
+# name command: run a check's command in this shell and give its status to verdict
 check() { eval "$2"; verdict "$1" $?; }
+# file pattern: poll up to a minute for the pattern to appear in the file
 wait_for() { for _ in $(seq 1 120); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.5; done; return 1; }
 stop_json() {  # cwd transcript lesson -> a Stop hook's JSON, with a LESSONS block
   "$PY" -c 'import json, sys; print(json.dumps({"session_id": "e2e", "cwd": sys.argv[1], "transcript_path": sys.argv[2],
             "last_assistant_message": "Done.\n\nLESSONS:\n[all] " + sys.argv[3]}))' "$@"
 }
+# dir: a stand-in HOME holding the fixture's transcripts and repository, and an initialised store
 new_home() { "$PY" "$E/fixture.py" "$1" && env -u MEMORY_ROOT HOME="$1" "$REPO/tools/init_store.sh" >/dev/null; }
 checkout() {  # dir [.env text]: hooks/ and bin/ copied, so the runner's choice never depends on this checkout's .env
   mkdir -p "$1/hooks" "$1/bin" && cp "$REPO"/hooks/*.sh "$1/hooks/" && cp "$REPO/bin/memory" "$1/bin/"
@@ -45,6 +49,7 @@ store_checks() {  # phase home tag log
   check "$1: each of the 160 turns of the long transcript reached the Reflector once" "'$PY' '$E/markers.py' '$4'"
   check "$1: the compile was committed to the store's git" "git -C '$2/memory' log --oneline | grep -q compile"
 }
+# stop the fake API, take down the Docker phase's project and image, and remove the temporary folder
 cleanup() {
   kill "$API" 2>/dev/null
   if [ -f "$W/compose/docker-compose.yml" ]; then "${DC[@]}" down -v --rmi all >/dev/null 2>&1; fi

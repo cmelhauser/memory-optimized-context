@@ -153,8 +153,9 @@ def test_a_live_holder_keeps_its_lock_fresh(m, monkeypatch):
     old = time.time() - 700
     with m.Lock():
         os.utime(m.LOCK, (old, old))          # as if the holder had worked for 700 s without a beat
-        time.sleep(0.2)
-        assert time.time() - m.LOCK.stat().st_mtime < 60                   # beaten, not still 700 s old; a loaded machine is slow
+        deadline = time.time() + 30           # a loaded machine may be slow to schedule the beat; it must still come
+        while time.time() - m.LOCK.stat().st_mtime >= 60 and time.time() < deadline: time.sleep(0.02)
+        assert time.time() - m.LOCK.stat().st_mtime < 60                   # beaten, not still 700 s old
         with pytest.raises(m.LockBusy), m.Lock(wait=0.3):
             pass
         assert m.LOCK.exists()
@@ -2352,13 +2353,6 @@ def test_init_store_makes_a_private_git_store_and_is_safe_to_rerun(tmp_path):
     assert log == "init store\n"
 
 
-def test_bootstrap_dry_run_touches_nothing(tmp_path):
-    env = {**os.environ, "HOME": str(tmp_path)}
-    out = subprocess.run(["bash", str(REPO / "tools" / "bootstrap.sh"), "--dry-run"], env=env, capture_output=True, text=True, check=True).stdout
-    assert out.startswith("would copy") and not any(tmp_path.iterdir())
-
-
-
 # ------------------------------------------------------------------ a lesson's age is its source's
 
 
@@ -3337,8 +3331,6 @@ def test_dependabot_watches_the_actions_and_the_image_by_patch_and_leaves_the_un
     assert all(f"package-ecosystem: {e}" in text for e in ("github-actions", "docker")) and "interval: weekly" in text
     assert "package-ecosystem: pip" not in text                                  # its updater drops the locks' markers
     assert "semver-minor" in text and "semver-major" in text                      # the base image moves by patch only
-
-
 
 
 def test_every_python_package_and_the_base_image_are_pinned_with_hashes_and_installed_checking_them():

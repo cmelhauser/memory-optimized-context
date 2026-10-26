@@ -15,7 +15,7 @@ reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v1.1.1`. 219 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v1.1.1`. 218 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. It has run natively against a real store
@@ -356,8 +356,8 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       219 tests, six-process concurrency test included
-tools/                     init_store.sh, bootstrap.sh, run_ci_locally.sh, e2e.sh and e2e/, install_nightly.sh, nightly_catchup.sh, check_docs.py, eval_recall.py
+tests/test_memory.py       218 tests, six-process concurrency test included
+tools/                     init_store.sh, run_ci_locally.sh, e2e.sh and e2e/, install_nightly.sh, nightly_catchup.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it
 docs/research.md           what was checked before deciding, and what each finding changed
@@ -366,7 +366,8 @@ docs/diagrams/             the original sketch and four drafts, ending at 04-as-
 Dockerfile, docker-compose.yml, .env.example, .dockerignore
 requirements-*.in/.txt     the pins: the image's runtime packages and the dev tools, hashed (see the header of each .txt)
 .github/                   the CI and release workflows, Dependabot's config, issue and pull request templates
-AGENTS.md, CLAUDE.md, CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, RELEASING.md, CHANGELOG.md, CITATION.cff, LICENSE, ATTRIBUTION.md
+AGENTS.md, CLAUDE.md, CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, RELEASING.md, CHANGELOG.md, FUTURE_WORK.md, CITATION.cff, LICENSE, ATTRIBUTION.md
+.pylintrc, ruff.toml, .coveragerc, pytest.ini  the lint and coverage gates (pylint 10.00, ruff, 100 per cent)
 ```
 
 ## Development
@@ -374,7 +375,7 @@ AGENTS.md, CLAUDE.md, CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, RELEASIN
 ```bash
 python3 -m venv .venv && . .venv/bin/activate && pip install --require-hashes -r requirements-dev.txt
 # requirements-dev.txt and requirements-runtime.txt are generated, with hashes, from their .in files (see each header)
-tools/run_ci_locally.sh            # ruff, actionlint, shellcheck, docs, tests at 100 per cent coverage
+tools/run_ci_locally.sh            # ruff, pylint 10.00, actionlint, shellcheck, docs, tests at 100 per cent coverage
 tools/run_ci_locally.sh --image    # plus the container build
 tools/e2e.sh                       # both installs end to end against fakes; --no-docker for native only
 ```
@@ -384,7 +385,7 @@ fake `claude` stand in, and everything runs in throwaway home directories. Its D
 needs Docker Desktop and skips itself on a machine where the real `memory` container is running.
 
 `AGENTS.md` has the ground rules, `RELEASING.md` the branch and tag scheme, `CONTRIBUTING.md`
-what will and will not be merged. `tools/check_docs.py` fails CI if a count in this file stops
+what will and will not be merged, and `FUTURE_WORK.md` what is open. `tools/check_docs.py` fails CI if a count in this file stops
 matching the tree.
 
 ## Costs

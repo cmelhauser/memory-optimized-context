@@ -9,23 +9,30 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
-if os.environ.get("MEMORY_REFLECT") != "1":
-    sys.exit(3)
-prompt = sys.stdin.read()
-log = os.environ["E2E_CLI_LOG"]
-answered = sum(1 for _ in open(log)) if os.path.exists(log) else 0
-fmt = sys.argv[sys.argv.index("--output-format") + 1] if "--output-format" in sys.argv else "text"
-limit = os.environ.get("E2E_FAIL_AFTER")
-if (limit and answered >= int(limit)) or (os.environ.get("E2E_FAIL_ON") and os.environ["E2E_FAIL_ON"] in prompt):
-    print(json.dumps({"type": "result", "subtype": "success", "is_error": True, "result": "Claude AI usage limit reached"}))
-    sys.exit(0)
-with open(log, "a") as f:
-    f.write(json.dumps({"argv": sys.argv[1:], "prompt": prompt}) + "\n")
-if "CANDIDATES:" in prompt:
-    text = '{"same": [], "contradicts": []}'
-else:
-    m = re.search(r"Default project for this conversation: (\S+)", prompt)
-    proj = m.group(1) if m else "all"
-    text = json.dumps([{"project": proj, "text": f"cli lesson for {proj}"}])
-print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": text}) if fmt == "json" else text)
+
+def main():
+    """Answer one `claude -p` call the way the e2e suite expects, or report a usage limit when told to."""
+    if os.environ.get("MEMORY_REFLECT") != "1":
+        sys.exit(3)
+    prompt = sys.stdin.read()
+    log = Path(os.environ["E2E_CLI_LOG"])
+    answered = len(log.read_text(encoding="utf-8").splitlines()) if log.exists() else 0
+    fmt = sys.argv[sys.argv.index("--output-format") + 1] if "--output-format" in sys.argv else "text"
+    limit = os.environ.get("E2E_FAIL_AFTER")
+    if (limit and answered >= int(limit)) or (os.environ.get("E2E_FAIL_ON") and os.environ["E2E_FAIL_ON"] in prompt):
+        print(json.dumps({"type": "result", "subtype": "success", "is_error": True, "result": "Claude AI usage limit reached"}))
+        sys.exit(0)
+    with log.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"argv": sys.argv[1:], "prompt": prompt}) + "\n")
+    if "CANDIDATES:" in prompt:
+        text = '{"same": [], "contradicts": []}'
+    else:
+        m = re.search(r"Default project for this conversation: (\S+)", prompt)
+        proj = m.group(1) if m else "all"
+        text = json.dumps([{"project": proj, "text": f"cli lesson for {proj}"}])
+    print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": text}) if fmt == "json" else text)
+
+
+main()

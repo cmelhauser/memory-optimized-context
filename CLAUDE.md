@@ -65,6 +65,8 @@ before editing either.
   is still its own.
 - Coverage is 100 per cent of lines and branches over `bin/memory`, `tools/check_docs.py` and
   `tools/eval_recall.py`, with nothing excluded in `.coveragerc`.
+- Pylint scores 10.00 over `bin/memory`, `tools` and `tests` (`.pylintrc`), ruff is clean, and every function and class
+  has a docstring except tests and `_names`.
 
 ## Things that look like bugs and are not
 

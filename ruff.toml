@@ -8,7 +8,7 @@
 line-length = 160
 target-version = "py310"   # the floor bin/memory declares; unset, a newer ruff assumes a later Python and
                            # proposes what 3.10 lacks, such as datetime.UTC
-extend-include = ["bin/memory"]
+extend-include = ["bin/memory", "tools/e2e/bin/claude"]   # files with no .py suffix
 
 [lint]
 select = ["E9", "F", "B", "W", "E501", "E731", "E741", "UP", "SIM", "PLE", "PLW", "RUF"]

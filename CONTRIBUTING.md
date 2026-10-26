@@ -8,7 +8,7 @@ This project follows the Contributor Covenant (`CODE_OF_CONDUCT.md`).
 ## Before you open a pull request
 
 1. Read `AGENTS.md`. It is short and it is the same set of rules for people and for agents.
-2. Run `tools/run_ci_locally.sh`. It runs what CI runs: ruff, actionlint, shellcheck, the Compose
+2. Check `FUTURE_WORK.md` for what is open. Run `tools/run_ci_locally.sh`. It runs what CI runs: ruff, pylint (10.00 or it fails), actionlint, shellcheck, the Compose
    check, `tools/check_docs.py` and the tests. If you touched the hooks, the Dockerfile, the
    Compose file or the Reflector, run `tools/e2e.sh` as well.
 3. Add a test. The coverage gate is 100 per cent, lines and branches, over `bin/memory`,
@@ -37,5 +37,5 @@ See `RELEASING.md`.
 
 ## Style
 
-`ruff.toml` and `shellcheck` are the whole style guide, and actionlint checks the workflows. The
+`ruff.toml`, `.pylintrc` (a score of 10.00, with a reason beside everything it switches off) and `shellcheck` are the whole style guide, and actionlint checks the workflows. Every function and class gets a docstring, except tests and names that start with an underscore. The
 single-file layout of `bin/memory` is deliberate; do not split it into a package.

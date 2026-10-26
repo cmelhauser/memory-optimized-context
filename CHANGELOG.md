@@ -7,8 +7,15 @@ the journal line format stable.
 
 ## [Unreleased]
 
+### Removed
+
+- `tools/bootstrap.sh` and its test: the one-time script that published the repository, which has been public since 0.1.0.
+
 ### Changed
 
+- `FUTURE_WORK.md` is the public roadmap (what is open, what to watch, ideas, what will not be done), linked from the README, `AGENTS.md` and `CONTRIBUTING.md`.
+- The extensionless `tools/e2e/bin/claude` stand-in is now linted by ruff and pylint like the rest of the code, and is a function rather than module-level code. Descriptions of the lint setup in the README, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md` and the workflow headers now name pylint, and the release workflow runs it too.
+- `test_a_live_holder_keeps_its_lock_fresh` waits (up to 30 s) for the heartbeat instead of sleeping a fixed 0.2 s, so a machine under heavy load no longer fails it.
 - The Reflector's instructions say that a merged pull request, a published release, a passing run or a finished job is status, not a lesson; such facts were being stored and went stale within days. `test_the_reflector_can_only_answer_never_act` pins the wording.
 - Each signing step in the release workflow (provenance and both SBOMs) is tried twice, so a transient timeout of the Sigstore log no longer fails a release.
 
