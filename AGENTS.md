@@ -44,8 +44,7 @@ Anthropic Claude. See `ATTRIBUTION.md` and `LICENSE`.
     and class documented (tests and `_names` excepted). Fix the code; where a rule must be switched off, say why beside it.
 11. **Name nothing private, and no one.** The repository is public. Tests, fixtures, prose and
     pull requests use neutral names, never the operator's own repositories, folders or
-    conversations, and carry no personal data: no names (the copyright holder's, in `LICENSE`, is the one exception),
-    email addresses, home paths or details of the operator's machine. `tools/check_docs.py` rejects email addresses and home paths.
+    conversations, and carry no personal data: no names, email addresses, home paths or details of the operator's machine. `tools/check_docs.py` rejects email addresses and home paths.
     Session handoffs go in an untracked `HANDOFF.md`, which `.gitignore` keeps out.
 
 ## Where things are

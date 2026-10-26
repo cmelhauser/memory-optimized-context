@@ -7,6 +7,10 @@ the journal line format stable.
 
 ## [Unreleased]
 
+### Fixed
+
+- No personal name is in the tree: the copyright holder in `LICENSE` is the GitHub handle `cmelhauser` again, and the rule that kept personal data out of the repository no longer has an exception for it.
+
 ### Removed
 
 - `tools/bootstrap.sh` and its test: the one-time script that published the repository, which has been public since 0.1.0.
@@ -30,7 +34,7 @@ A patch: tooling, documentation and refreshed pins. Nothing in the store's schem
 - Every text file the tool reads or writes is opened as UTF-8 by name, instead of by the machine's locale, so what is written is the same on every host.
 - The release workflow signs each platform's SBOM with `actions/attest`, which replaces the deprecated `actions/attest-sbom`; `RELEASING.md` says what to do when signing hits a Rekor timeout (re-run the failed job). `test_workflows_pin_actions_by_commit_and_only_the_publish_job_writes_packages` covers the workflow.
 - Documentation brought in line with the code: the README's `MEMORY_ROOT`, `MEMORY_UID`, `MEMORY_GID`, `memory hook` flags and `MEMORY_MAX_LINES` rows (Claude Code's 200 lines is guidance for an instruction file, not an import cap); decision 002 (the database is the system of record, not a derived index), 005 and 006; the architecture notes on the commit, on the image and on `CLAUDE_CODE_DISABLE_AUTO_MEMORY`; the as-built diagram's inputs; the tag example in `RELEASING.md`; and the rule on personal data, which now names the copyright holder in `LICENSE` as the one exception.
-- The copyright holder in `LICENSE` now reads "Christopher Melhauser (GitHub: cmelhauser)", the same name in every repository (it said "cmelhauser"). The MIT terms are unchanged.
+- The copyright line in `LICENSE` was reworded. The MIT terms are unchanged.
 
 ## [1.1.0] - 2026-10-16
 
