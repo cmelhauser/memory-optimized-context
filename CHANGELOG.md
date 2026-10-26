@@ -7,6 +7,10 @@ the journal line format stable.
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-10-26
+
+A patch: the Reflector's instructions, the release signing, the repository's hygiene and refreshed pins. Nothing in the store's schema, `lid()` or the journal format changed.
+
 ### Fixed
 
 - No personal name is in the tree: the copyright holder in `LICENSE` is the GitHub handle `cmelhauser` again, and the rule that kept personal data out of the repository no longer has an exception for it.
