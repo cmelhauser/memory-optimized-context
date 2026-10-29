@@ -6,14 +6,18 @@ and a release follows `RELEASING.md`. Session-by-session handoffs are not kept i
 
 ## Next
 
-1. **Judge the tuning on a month of real use.** The scoring constants (`half_life_days=90`, `min_score=0.15`,
-   `max_lines=150`) were chosen once and reviewed once. Pruning has not yet acted on real data, because no lesson
-   is old enough to fall below `min_score`. Read `memory status` and the nightly log, then decide whether any
-   constant moves. Changing one is a MINOR or PATCH release: no store needs migrating.
-2. **A project with more lessons than the cap hides the rest.** `compile_` writes the top 150 lines per project;
-   a project with far more active lessons shows only its best, and the others are reached by `search` and the MCP
-   `recall`. Options: a per-project cap that favours recent lessons, or merging near-duplicates by meaning (which
-   needs embeddings, so it would be opt-in).
+1. **Revisit the tuning in spring 2027, not before.** Measured on 29 Oct 2026 over a store of 4,565 active lessons whose oldest
+   is six weeks old: a lesson with one vote falls below `min_score=0.15` only after about 246 days
+   (`0.5 ** (age / 90) < 0.15`), so pruning cannot act on one-vote lessons before mid-May 2027; only a second harmful vote
+   archives sooner. There is nothing to tune yet. When the oldest lessons near that age, read how many would be pruned and
+   whether the survivors still read as useful, then decide whether `half_life_days` or `min_score` moves. Changing one is
+   a MINOR or PATCH release: no store needs migrating.
+2. **The line cap is per file already; leave it.** `compile_` writes at most `max_lines=150` lines per project file, best score
+   first, so a big project does not crowd out a small one. In the largest project (1,663 active lessons) the file holds
+   everything with 7 or more votes; about 900 lessons with 2 to 6 votes are reached by `search` and the MCP `recall`. The cap is
+   the context budget every session in that project pays, so raising it for one project costs more than it gains. A real
+   fix for the long tail is merging near-duplicates by meaning, which needs embeddings and so would be opt-in; start it
+   only if embeddings are adopted (see `README.md`).
 3. **Get `helpful` votes recorded.** `memory vote --helpful` and the MCP `feedback` tool exist, but no lesson
    has a `helpful` vote yet, so scoring runs on repetition alone. Decide whether recall should prompt for feedback,
    or whether the signal is not worth chasing.
