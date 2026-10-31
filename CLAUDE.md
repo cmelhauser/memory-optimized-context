@@ -56,8 +56,8 @@ before editing either.
 - What `compiled/` holds is cleaned where it is written (`compiled_text`): one line, at most 500 characters, and
   every `@path` broken with a zero-width space, since Claude Code imports an `@path` anywhere in a line.
 - The store's commit adds only `.gitignore`, `archive`, `compiled` and `journal`, logs a failure, and gives git 60 s.
-- A writer that cannot get the lock raises `LockBusy`; the MCP tools answer "busy" and the
-  server keeps running.
+- A writer that cannot get the lock raises `LockBusy`; `feedback` answers "busy", `remember` says the
+  lesson is journaled for the next ingest, and the server keeps running.
 - A lock holder touches `.lock` every 60 s, and only a lock untouched for 600 s is broken as a
   crashed holder's, so a `learn` of any length keeps its lock. Breaking one happens under
   `.lock.break`, so two writers cannot both break it (a `.lock.break` a minute old was left by a

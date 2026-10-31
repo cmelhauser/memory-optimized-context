@@ -11,7 +11,7 @@ way.
 
 | File or directory | Writer | Everyone else |
 |---|---|---|
-| `journal/DATE/*.md` | the process that created it, once, by exclusive create | read |
+| `journal/DATE/*.md` | the process that created it, once, hard-linked whole from a `.part` file | read |
 | `journal/claude-ai/*.md` | claude.ai, through Google Drive, one new file per note | read |
 | `memory.db` | `bin/memory` inside `Lock()` | read |
 | `compiled/*.md` | `bin/memory` inside `Lock()`, by atomic rename | read |
@@ -24,7 +24,7 @@ way.
    Cursor, Claude Desktop's agent mode, Codex), git repositories (commit messages and docs), note
    folders, and claude.ai, ChatGPT and Gemini exports. Each source has a cursor in the `sources`
    table, so the walk is incremental: a commit hash, a content hash, a byte offset, an export's
-   update time (a commit cursor lists the tip of every branch). `[project] fact` lines anywhere are ingested without an
+   update time (a commit cursor lists the tips read so far, one per branch that was checked out). `[project] fact` lines anywhere are ingested without an
    LLM call (in a repository's own docs only those for its own slug); prose,
    transcripts and chats are windowed into ~30k-character batches for the Reflector, headers
    counted, so nothing is cut. A Claude Code transcript's project is the `cwd` recorded in it,
@@ -116,8 +116,8 @@ Embeddings are off by default. The corpus is dense with exact tokens (`maxconn`,
   one process in one tick still get two files; the test suite proves it.
 - **Lock:** `mkdir .lock` on the bind-mounted store, so host and container processes serialise
   against the same directory. Waits up to 20 s (2 s for the SessionStart hook's
-  `ingest --wait 2`), then gives up with `LockBusy`; the MCP tools answer "busy" instead of
-  stopping. Breaks a lock untouched for 10 minutes (a holder touches it every 60 s). A Stop hook waits up to 120 s, and holds the
+  `ingest --wait 2`), then gives up with `LockBusy`; `feedback` answers "busy" and `remember` says the
+  lesson is journaled for the next ingest, instead of stopping. Breaks a lock untouched for 10 minutes (a holder touches it every 60 s). A Stop hook waits up to 120 s, and holds the
   lock only to store its lessons and to settle contradiction checks, never across a Reflector
   call; `.reflecting/` holds one claim per transcript a hook is reflecting.
 - **Outputs:** `.tmp` sibling then `os.replace`. A reader never sees a torn file.

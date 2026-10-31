@@ -54,7 +54,7 @@ A tag asserts that the repository was in a releasable state at that commit. All 
 this order:
 
 1. The pins are fresh. Dependabot does not watch the hashed lock files (see `.github/dependabot.yml`), so
-   recompile both with `--upgrade`, with the command in each `.in` file's header, and merge the result in its own
+   recompile both with `--upgrade`, with the command in each `.txt` file's header, and merge the result in its own
    pull request when anything moved.
 2. `tools/run_ci_locally.sh --image` and `tools/e2e.sh` clean.
 3. CI green for that commit, including the `container` job: a fast-forward merge puts the

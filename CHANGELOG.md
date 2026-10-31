@@ -7,6 +7,15 @@ the journal line format stable.
 
 ## [Unreleased]
 
+### Fixed
+
+- The one-time command for a root-made `memory-db` volume failed: the service drops every capability, so root could not `chown`. The README and the 1.1.0 entry now add `CHOWN` and `DAC_READ_SEARCH` for that one run.
+- Prose brought in line with the code: the native install's pins need Python 3.12 (`bin/memory` itself runs on 3.10); a claude.ai note must be a `.md` file; one harmful vote archives a lesson with one or two votes, not only a second; the commit cursor keeps the tips of branches checked out at a run, not of every branch; only `feedback` answers "busy" (`remember` journals the lesson); `install_nightly.sh` passes only `CALLS`; and `memory status` is in `bin/memory`'s header.
+
+### Changed
+
+- `FUTURE_WORK.md` is reordered by what can start now, with each item's next action and what blocks it.
+
 ## [1.1.2] - 2026-10-26
 
 A patch: the Reflector's instructions, the release signing, the repository's hygiene and refreshed pins. Nothing in the store's schema, `lid()` or the journal format changed.
@@ -58,7 +67,7 @@ the native install needs nothing.
   takes `user:` from `MEMORY_UID` and `MEMORY_GID` (default 10001), so a Linux host can name its own uid. `/data` is made
   before the volume is declared, so a new `memory-db` volume belongs to that user. **Upgrading:** a `memory-db` volume
   made by an earlier release is owned by root and the container can no longer write it; give it to the new user once with
-  `docker compose run --rm --user root --entrypoint chown memory -R 10001:10001 /data`. The native install is unchanged.
+  `docker compose run --rm --user root --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint chown memory -R 10001:10001 /data`. The native install is unchanged.
   `test_the_container_runs_as_an_unprivileged_user_and_compose_can_name_the_uid`.
 
 - The nightly catch-up tests no longer show real macOS notifications. The runs that alert on purpose found the real

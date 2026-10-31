@@ -1,36 +1,41 @@
 # Future work
 
-What is known to be open, in the order it will be picked up. This file is the public roadmap: when an item is
+What is known to be open: what is next, what is waiting and on what, and what to watch. This file is the public roadmap: when an item is
 done, delete it here and say so in `CHANGELOG.md`; when a new gap is found, add it. Nothing here is a promise,
 and a release follows `RELEASING.md`. Session-by-session handoffs are not kept in the repository.
 
 ## Next
 
-1. **Revisit the tuning in spring 2027, not before.** Measured on 29 Oct 2026 over a store of 4,565 active lessons whose oldest
-   is six weeks old: a lesson with one vote falls below `min_score=0.15` only after about 246 days
-   (`0.5 ** (age / 90) < 0.15`), so pruning cannot act on one-vote lessons before mid-May 2027; only a second harmful vote
-   archives sooner. There is nothing to tune yet. When the oldest lessons near that age, read how many would be pruned and
-   whether the survivors still read as useful, then decide whether `half_life_days` or `min_score` moves. Changing one is
-   a MINOR or PATCH release: no store needs migrating.
-2. **The line cap is per file already; leave it.** `compile_` writes at most `max_lines=150` lines per project file, best score
-   first, so a big project does not crowd out a small one. In the largest project (1,663 active lessons) the file holds
-   everything with 7 or more votes; about 900 lessons with 2 to 6 votes are reached by `search` and the MCP `recall`. The cap is
-   the context budget every session in that project pays, so raising it for one project costs more than it gains. A real
-   fix for the long tail is merging near-duplicates by meaning, which needs embeddings and so would be opt-in; start it
-   only if embeddings are adopted (see `README.md`).
-3. **Get `helpful` votes recorded.** `memory vote --helpful` and the MCP `feedback` tool exist, but no lesson
-   has a `helpful` vote yet, so scoring runs on repetition alone. Decide whether recall should prompt for feedback,
-   or whether the signal is not worth chasing.
-4. **Validate the ChatGPT and Gemini adapters on real exports.** They are tested against fixtures built from the
-   documented export formats. The first real export may show a field the fixtures lack; fix it with a test.
+Each item can start as soon as what blocks it is cleared; both need an install that is running and reading real sessions.
+
+1. **Get `helpful` votes recorded.** `memory vote --helpful` and the MCP `feedback` tool exist, and `examples/global-CLAUDE.md`
+   has the sentences that tell Claude to use it, but no lesson has a `helpful` vote yet, so scoring runs on repetition
+   alone. Next: put those sentences in the global `CLAUDE.md`, and after a month count `helpful` votes with `memory status`;
+   if there are still none, drop `helpful` from the roadmap. Blocked by: a live install with the MCP server on.
+2. **Validate the ChatGPT and Gemini adapters on real exports.** They are tested against fixtures built from the documented
+   export formats. Next: request both exports (the README says how), run `memory learn --export FILE`, and fix anything
+   the fixtures lacked, with a test. Blocked by: the operator requesting the exports.
+
+## Waiting
+
+- **Revisit the tuning, not before May 2027.** Measured on 29 Oct 2026 over 4,565 active lessons, the oldest six weeks old: a
+  lesson with one vote falls below `min_score=0.15` only after about 246 days (`0.5 ** (age / 90) < 0.15`), so age cannot
+  prune anything before mid-May 2027; only harmful votes archive sooner. Next, then: read how many lessons would be pruned
+  and whether the survivors still read as useful, and decide whether `half_life_days` or `min_score` moves. Changing one is a
+  MINOR or PATCH release: no store needs migrating.
+- **The long tail under the line cap, if embeddings are adopted.** `compile_` already caps each project file at
+  `max_lines=150`, best score first, so a big project does not crowd out a small one, and the cap is the context budget every
+  session in that project pays, so it stays. In the largest project (1,663 active lessons) the file holds about everything
+  with 8 or more votes; 747 lessons with 2 to 6 votes and 751 with one are reached by `search` and the MCP `recall`. The
+  real fix is merging near-duplicates by meaning, which needs embeddings and so would be opt-in.
 
 ## Watch
 
-- **The Reflector's output.** Its instructions now say status (a merge, a release, a passing run) is not a lesson.
-  Look at a week of new lessons for one-off facts that slip through, and tighten `REFLECT_SYS` if they do. Its first
-  forty characters detect the Reflector's own transcripts, so they must not change.
-- **The release workflow's signing retry.** Each Sigstore signing step is tried twice. It has only run in CI
-  syntax checks, never on a tag; the next release is its first real use.
+- **The Reflector's output.** Its instructions say status (a merge, a release, a passing run) is not a lesson. Look at a week
+  of new lessons for one-off facts that slip through, and tighten `REFLECT_SYS` if they do. Its first forty characters
+  detect the Reflector's own transcripts, so they must not change.
+- **The release workflow's signing retry.** It shipped in v1.1.2, whose run passed; at each release, check whether a retry
+  step fired, since it has not yet been seen to.
 - **Third-party limits.** The Reflector depends on `claude -p` being logged in, or on an API key; when either lapses
   the nightly job writes `needs-attention` and `memory status` says so.
 

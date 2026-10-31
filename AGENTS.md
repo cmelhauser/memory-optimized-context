@@ -21,20 +21,20 @@ Anthropic Claude. See `ATTRIBUTION.md` and `LICENSE`.
 ## Ground rules
 
 1. **One writer per file.** `compiled/` and `memory.db` are written only by `bin/memory` under
-   `Lock()`. Journal files are written once, by exclusive create, and never edited. Do not add a
+   `Lock()`. Journal files are written once, hard-linked whole from a `.part` file, and never edited. Do not add a
    code path that violates either.
 2. **ADD-only.** Lessons are never deleted. Supersession, merging and archiving are state
    changes. If you need to remove something, it is a state, not a `DELETE`.
 3. **Do not weaken a test to make it pass.** `test_parallel_hook_processes_do_not_lose_updates`
    and `test_journal_write_never_appends` exist because the bugs they catch were real.
-4. **No new runtime dependencies.** The standard library is the runtime. `anthropic` and `mcp`
+4. **No new runtime dependencies.** The standard library is the runtime. `anthropic`, `mcp` and `numpy`
    are optional imports and must stay behind `try:`.
 5. **Do not commit a store.** No `memory.db`, no journal, no transcript, no export. The
    `.gitignore` enforces the obvious cases; you enforce the rest.
 6. **Keep the file single.** Do not split `bin/memory` into a package. Its whole value is that
    it installs by copying one file.
-7. **Keep the prose true.** `tools/check_docs.py` runs in CI. If you add a test, the counts in
-   `README.md`, `AGENTS.md`, `CHANGELOG.md` and `RELEASING.md` must move with it.
+7. **Keep the prose true.** `tools/check_docs.py` runs in CI. If you add a test, any count in
+   the prose `check_docs.py` scans must move with it.
 8. **`main` takes no direct commits.** Branch, open a pull request, let CI run. See
    `RELEASING.md`.
 9. **Keep coverage whole.** `.coveragerc` holds `bin/memory`, `tools/check_docs.py` and

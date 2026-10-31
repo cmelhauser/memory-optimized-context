@@ -60,7 +60,7 @@ python3 -m venv .venv && .venv/bin/pip install --require-hashes -r requirements-
 .venv/bin/python3 bin/memory compile
 ```
 
-Python 3.10 or newer; macOS's `/usr/bin/python3` is 3.9, so build the venv with Homebrew's. The
+`bin/memory` runs on Python 3.10 or newer, but the pins in `requirements-runtime.txt` need 3.12 or newer (numpy); macOS's `/usr/bin/python3` is 3.9, so build the venv with Homebrew's. The
 venv is optional. Without it the hooks run Homebrew's `python3`, and reflection still works,
 because `claude -p` needs nothing installed; the hooks find `claude` on `PATH` or in
 `~/.local/bin`. `MEMORY_LLM=none` for keyword-only.
@@ -91,7 +91,7 @@ finds `~/.claude/projects` and `~/GitHub`. The container runs as an unprivileged
 capability dropped. Docker Desktop on macOS maps the files it writes to your host user; on Linux, set `MEMORY_UID` and
 `MEMORY_GID` in `.env` to your own (`id -u`, `id -g`) so it can write `~/memory`. A `memory-db` volume made by a release
 up to 1.0.0, when the container ran as root, is owned by root: give it to the new user once with
-`docker compose run --rm --user root --entrypoint chown memory -R 10001:10001 /data`.
+`docker compose run --rm --user root --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint chown memory -R 10001:10001 /data`.
 
 Compose refuses to start without `.env`. That is deliberate: the image has no `claude` CLI, so
 a container without a key has no Reflector.
@@ -116,7 +116,7 @@ claude mcp add --scope user --transport http memory http://127.0.0.1:8765/mcp   
 ```
 
 The server's `feedback` tool marks a recalled lesson helpful or harmful, and both feed the score (two
-harmful marks archive a lesson). Nothing calls it unless Claude is told to: `examples/global-CLAUDE.md`
+harmful marks archive any lesson, one a lesson with one or two votes). Nothing calls it unless Claude is told to: `examples/global-CLAUDE.md`
 has the two sentences that do. Only lessons `recall` returns carry an id to send; the lines in `compiled/`
 do not.
 
@@ -166,7 +166,7 @@ Google Drive for desktop: sync exactly `~/memory/compiled` and `~/memory/journal
 ```
 At the start of each conversation, read memory/compiled/PLAYBOOK.md and
 memory/compiled/projects/<project>.md from Google Drive. To save a durable lesson,
-create a NEW file in memory/journal/claude-ai/ containing lines `[project] fact`.
+create a NEW `.md` file in memory/journal/claude-ai/ containing lines `[project] fact`.
 Never edit anything under memory/compiled/.
 ```
 
@@ -182,7 +182,7 @@ database, so it is safe to run daily; a second run over an unchanged source make
 | Source | Flag | What is read | Cursor |
 |---|---|---|---|
 | Transcripts: Claude Code, Cursor, Claude Desktop's agent mode, Codex | `--transcripts [--transcripts-from DIR]` | every transcript in the folders under [What `--transcripts` reads](#what---transcripts-reads), whole, in ~30k windows; for Claude Code, each session and, beneath it, its subagents and workflow agents | byte offset per file, moved window by window |
-| A git repository | `--repo PATH` | commit messages (`--no-merges`, oldest first), `README*`, `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `HANDOFF.md`, `docs/**/*.md`, `*.md` | the tip of every branch, as a list; content hash per doc |
+| A git repository | `--repo PATH` | commit messages (`--no-merges`, oldest first), `README*`, `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `HANDOFF.md`, `docs/**/*.md`, `*.md` | the tips read so far, ten at most, one per branch checked out at a run (only the checked-out branch is read); content hash per doc |
 | A folder of notes | `--notes DIR [--project slug]` | every `.md` and `.txt`, recursively | content hash per file |
 | claude.ai export (web, Desktop, mobile, Cowork) | `--export FILE` | `conversations.json`, both message shapes | `updated_at` per conversation |
 | ChatGPT export | `--export FILE` | `conversations.json`, the branch of each chat that was on screen | `update_time` per conversation |
@@ -336,7 +336,7 @@ or a spent limit is the usual cause of exit 2; `echo 'Say OK' | claude -p --outp
 | `MEMORY_STATE_DIR` | `~/.local/share/memory-optimized-context` | where `memory status` and the nightly job keep and read `backfill.log` and `needs-attention` |
 | `MEMORY_UID`, `MEMORY_GID` | `10001` | Docker Compose only: the user and group the container runs as; on Linux set them to yours (see Docker above) |
 | `MEMORY_PYTHON` | this checkout's `.venv`, else `python3` | the nightly job's interpreter |
-| `CALLS`, `RETRY_WAIT` | `60`, `60` | the nightly job's Reflector-call budget, and the seconds it waits between tries while a hook holds the lock |
+| `CALLS`, `RETRY_WAIT` | `60`, `60` | the nightly job's Reflector-call budget, and the seconds it waits between tries while a hook holds the lock. `install_nightly.sh` passes only `CALLS`: set the rest of this table's nightly settings in the plist's `EnvironmentVariables` or the cron line |
 
 ## Guarantees
 

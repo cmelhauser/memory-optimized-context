@@ -1,7 +1,7 @@
 # Development and CI dependencies: the INPUT. The tool itself needs only the Python standard library; everything here
 # exists to test and check the repository. CI installs requirements-dev.txt, which is this file resolved to exact
 # versions with hashes, the same for every Python from 3.10. `mcp` is pinned to the image's, so the suite runs against
-# the MCP SDK that ships; numpy resolves per Python, since the image's 2.4 needs 3.11 and the suite runs on 3.10 too.
+# the MCP SDK that ships; numpy resolves per Python, since the image's 2.5 needs 3.12 and the suite runs on 3.10 too.
 # To change a floor, edit this file and run:
 #
 #   uv pip compile requirements-dev.in --universal --generate-hashes --python-version 3.10 -o requirements-dev.txt

@@ -8,7 +8,7 @@
 #   tools/e2e.sh              the native phases, then Docker when Docker Desktop is available
 #   tools/e2e.sh --no-docker  the native phases only
 #
-# Needs git and Python 3.10+ (python3.12 if present). The Docker phase needs Docker Desktop, which
+# Needs git and Python 3.12+ (the native phase's venv installs the runtime pins). The Docker phase needs Docker Desktop, which
 # reaches the fake API at host.docker.internal, and skips itself when a container named `memory`
 # exists or port 8765 is taken, as on a machine running the real install. E2E_KEEP=1 keeps the
 # temporary folder; E2E_VENV reuses a venv between runs.

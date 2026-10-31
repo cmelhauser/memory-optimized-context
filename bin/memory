@@ -24,6 +24,7 @@ Subcommands (`memory COMMAND --help` for every flag):
   compile   write compiled/*.md from active lessons (also prunes)
   search    hybrid FTS5 + vector, RRF
   remember  add one lesson by hand
+  status    what the store holds and owes, and how the nightly job and the hooks have done (read-only)
   vote      --helpful/--harmful ID
   mcp       MCP server exposing recall / remember / feedback. --transport stdio (Claude Desktop, docker exec -i)
             or --transport http, on 127.0.0.1 unless --host (Claude Code: claude mcp add --transport http memory
@@ -119,7 +120,7 @@ LOCK_STALE = 600  # a lock untouched for this long belonged to a process that di
 
 class LockBusy(SystemExit):
     """Another writer held the lock for the whole wait, usually a long `learn`. A SystemExit, so the CLI still exits
-    with the message; the MCP tools catch it and answer "busy" rather than stop the server."""
+    with the message; the MCP tools catch it rather than stop the server: `feedback` answers "busy", `remember` says the lesson is journaled."""
 
 class Lock:
     """One writer at a time, through `mkdir`, which is atomic everywhere this runs.
@@ -1472,7 +1473,7 @@ def cmd_status(a):
         print("hooks      no dated runs in the last 7 days (hook.log is dated from 0.2.1)")
 
 def cmd_vote(a):
-    """`memory vote`: add a helpful or harmful vote to a lesson; a second harmful vote archives it at once."""
+    """`memory vote`: add a helpful or harmful vote to a lesson; a harmful vote that takes it below `min_score`, or a second one, archives it at once."""
     col = "helpful" if a.helpful else "harmful"
     with Lock(), db() as c:
         voted = c.execute(f"UPDATE lessons SET {col}={col}+1 WHERE id=?", (a.id,)).rowcount
@@ -1524,7 +1525,7 @@ def cmd_mcp(a):
 
     @srv.tool()
     def feedback(lesson_id: str, helpful: bool = True) -> str:
-        """Mark a recalled lesson as helpful or harmful (harmful x2 archives it)."""
+        """Mark a recalled lesson as helpful or harmful (harmful twice archives any lesson, once a lesson with one or two votes)."""
         col = "helpful" if helpful else "harmful"
         try:
             with Lock(), db() as c:
@@ -1587,7 +1588,7 @@ def main():
     s.set_defaults(f=cmd_remember)
     s = sp.add_parser("status", help="what the store holds and owes, and how the nightly job and the hooks have done (read-only)")
     s.set_defaults(f=cmd_status)
-    s = sp.add_parser("vote", help="mark a lesson helpful or harmful; harmful twice archives it")
+    s = sp.add_parser("vote", help="mark a lesson helpful or harmful; harmful twice archives any lesson, once a lesson with one or two votes")
     s.add_argument("id", help="the lesson's id, as search prints it")
     g = s.add_mutually_exclusive_group(required=True)
     g.add_argument("--helpful", action="store_true"); g.add_argument("--harmful", action="store_true")
