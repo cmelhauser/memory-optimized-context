@@ -7,6 +7,10 @@ the journal line format stable.
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-11-04
+
+A patch: the volume upgrade command works, the prose matches the code, and the pins are fresh. Nothing in the store's schema, `lid()` or the journal format changed.
+
 ### Fixed
 
 - The one-time command for a root-made `memory-db` volume failed: the service drops every capability, so root could not `chown`. The README and the 1.1.0 entry now add `CHOWN` and `DAC_READ_SEARCH` for that one run.
@@ -15,6 +19,7 @@ the journal line format stable.
 ### Changed
 
 - `FUTURE_WORK.md` is reordered by what can start now, with each item's next action and what blocks it.
+- The hashed locks are refreshed (pydantic 2.14.2, anyio 4.16.0, pytest 9.2.0, ruff 0.17.3 and smaller bumps); `actions/setup-python` is 7.1.0 and `docker/login-action` 4.7.0.
 
 ## [1.1.2] - 2026-10-26
 
