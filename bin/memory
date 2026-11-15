@@ -25,6 +25,8 @@ Subcommands (`memory COMMAND --help` for every flag):
   search    hybrid FTS5 + vector, RRF
   remember  add one lesson by hand
   status    what the store holds and owes, and how the nightly job and the hooks have done (read-only)
+  doctor    check the install: the hooks, the MCP server, the store, the lock, the Reflector, the schedule (read-only);
+            --live makes one Reflector call to check the login
   vote      --helpful/--harmful ID
   mcp       MCP server exposing recall / remember / feedback. --transport stdio (Claude Desktop, docker exec -i)
             or --transport http, on 127.0.0.1 unless --host (Claude Code: claude mcp add --transport http memory
@@ -33,6 +35,7 @@ Subcommands (`memory COMMAND --help` for every flag):
 import argparse
 import hashlib
 import html
+import importlib.util
 import json
 import math
 import os
@@ -1459,9 +1462,8 @@ def cmd_status(a):
           f"{DB.stat().st_size // 1024 // 1024 if DB.exists() else 0} MB, {helpful} marked helpful")
     print(f"owed       {owed} contradiction check(s)" + (": the next `learn` pays them" if owed else ""))
     print("lock       " + ("held: a `learn` or a hook is writing" if LOCK.exists() else "free"))
-    state = Path(os.environ.get("MEMORY_STATE_DIR") or Path.home() / ".local" / "share" / "memory-optimized-context")
-    nightly = [ln for ln in (state / "backfill.log").read_text(encoding="utf-8", errors="replace").splitlines() if "nightly catch-up" in ln] \
-        if (state / "backfill.log").exists() else []
+    state = state_dir()
+    nightly = nightly_lines(state)
     print("nightly    " + (nightly[-1].removeprefix("== ") if nightly else "no run logged"))
     if (state / "needs-attention").exists():
         print("ALERT      " + " ".join((state / "needs-attention").read_text(encoding="utf-8").split())[:200] + f"  ({state / 'backfill.log'})")
@@ -1471,6 +1473,139 @@ def cmd_status(a):
         print(f"reflector  the hooks made {calls} Reflector calls in those 7 days, ${dollars:.2f}")
     else:
         print("hooks      no dated runs in the last 7 days (hook.log is dated from 0.2.1)")
+
+def state_dir():
+    """Where the nightly job keeps `backfill.log` and `needs-attention`: $MEMORY_STATE_DIR, as tools/nightly_catchup.sh reads it."""
+    return Path(os.environ.get("MEMORY_STATE_DIR") or Path.home() / ".local" / "share" / "memory-optimized-context")
+
+def nightly_lines(state):
+    """The nightly job's start and finish lines in `backfill.log`, oldest first; none when it has never run."""
+    log_ = state / "backfill.log"
+    if not log_.exists(): return []
+    return [ln for ln in log_.read_text(encoding="utf-8", errors="replace").splitlines() if "nightly catch-up" in ln]
+
+NIGHTLY_LABEL = "local.memory-optimized-context.nightly-catchup"   # tools/install_nightly.sh's launchd label
+HOOK_SCRIPTS = {"SessionStart": "compile.sh", "Stop": "journal.sh", "SubagentStop": "journal.sh"}   # hooks/settings.snippet.json
+NIGHTLY_DATE = re.compile(r"^== (\d{4}-\d\d-\d\d) ")
+
+def read_json(path):
+    """The JSON object in `path`, or {} when the file is missing, unreadable, or holds something else."""
+    try: data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError): return {}
+    return data if isinstance(data, dict) else {}
+
+def hook_commands(settings, event):
+    """The command lines a Claude Code settings.json runs on `event`, skipping any entry it cannot read."""
+    hooks = settings.get("hooks")
+    groups = hooks.get(event) if isinstance(hooks, dict) else None
+    return [h["command"] for g in (groups if isinstance(groups, list) else []) if isinstance(g, dict)
+            for h in (g.get("hooks") if isinstance(g.get("hooks"), list) else []) if isinstance(h, dict) and isinstance(h.get("command"), str)]
+
+def age_of(path):
+    """Seconds since `path` was last touched, or None when it is not there (a lock can go between a look and a stat)."""
+    try: return time.time() - path.stat().st_mtime
+    except OSError: return None
+
+def doctor_hooks(claude_dir):
+    """The Stop, SubagentStop and SessionStart hooks: listed in settings.json, and pointing at a script that runs."""
+    settings, out = read_json(claude_dir / "settings.json"), []
+    for event, script in HOOK_SCRIPTS.items():
+        cmds = [cmd for cmd in hook_commands(settings, event) if script in cmd]
+        if not cmds:
+            out.append(("warn" if event == "SubagentStop" else "FAIL", f"no {event} hook runs {script}: add the lines in "
+                        f"hooks/settings.snippet.json to {claude_dir / 'settings.json'}"))
+            continue
+        path = Path(os.path.expanduser(cmds[0].split()[0]))
+        out.append(("ok", f"{event} runs {path}") if os.access(path, os.X_OK)
+                   else ("FAIL", f"{event} runs {path}, which is missing or not executable"))
+    runs, _, _ = hook_health(ROOT / "hook.log")
+    if not any(level == "FAIL" for level, _ in out) and not runs:
+        out.append(("warn", f"no hook run logged in {ROOT / 'hook.log'} in the last 7 days: has a session ended since they were added?"))
+    return out
+
+def doctor_mcp(claude_json):
+    """The MCP server, registered at user scope as `memory`. Optional: the hooks work without it."""
+    servers = read_json(claude_json).get("mcpServers")
+    if isinstance(servers, dict) and "memory" in servers: return [("ok", f"`memory` is registered in {claude_json}")]
+    return [("warn", f"no MCP server named `memory` in {claude_json} (optional: recall, remember and feedback mid-session; "
+                     "the README has the `claude mcp add` line)")]
+
+def doctor_store():
+    """The database opens read-only and passes SQLite's quick check, and something has been compiled."""
+    if not DB.exists(): return [("warn", f"no database at {DB} yet: the first hook run or `memory learn` creates it")]
+    try:
+        con = sqlite3.connect(DB.resolve().as_uri() + "?mode=ro", uri=True)   # read-only: the doctor never writes
+        try: verdict, active = con.execute("PRAGMA quick_check").fetchone()[0], \
+            con.execute("SELECT count(*) FROM lessons WHERE state='active'").fetchone()[0]
+        finally: con.close()
+    except sqlite3.Error as e: verdict, active = str(e), 0
+    out = [("ok", f"{DB} passes SQLite's quick check, {active} active lessons") if verdict == "ok"
+           else ("FAIL", f"{DB} fails SQLite's quick check: {verdict[:200]}")]
+    if not (COMPILED / "PLAYBOOK.md").exists() and not (COMPILED / "projects").is_dir():
+        out.append(("warn", f"nothing compiled in {COMPILED}: run `memory compile`"))
+    return out
+
+def doctor_lock():
+    """The lock: free, held by a live writer, or left by a crashed one (which the next writer breaks on its own)."""
+    age, brk = age_of(LOCK), age_of(BREAK)
+    out = [("ok", "free") if age is None else
+           ("ok", f"held by a live writer, touched {age:.0f} s ago") if age <= LOCK_STALE else
+           ("warn", f"held but untouched for {age:.0f} s, so a crashed writer's: the next writer breaks it")]
+    if brk is not None and brk > BREAK_STALE:
+        out.append(("warn", f"{BREAK} was left by a writer that died while breaking a lock: the next writer removes it"))
+    return out
+
+def doctor_reflector(live):
+    """What would answer a reflection, whether the nightly job flagged a failure, and with --live whether a call is answered."""
+    state, out, mode = state_dir(), [], CFG["llm"]
+    sdk = mode in ("auto", "sdk") and bool(os.environ.get("ANTHROPIC_API_KEY")) and importlib.util.find_spec("anthropic") is not None
+    cli = shutil.which("claude") if mode in ("auto", "cli") else None
+    if mode == "none":
+        out.append(("warn", "MEMORY_LLM=none: nothing is reflected; only LESSONS: blocks and `remember` add lessons"))
+    elif not (sdk or cli):
+        out.append(("FAIL", "no Reflector: needs ANTHROPIC_API_KEY with `anthropic` installed, or `claude` on PATH"))
+    else:
+        out.append(("ok", ("the SDK, with ANTHROPIC_API_KEY" if sdk else f"`claude -p` at {cli}")
+                    + ("" if live else "; `memory doctor --live` makes one call to check the login")))
+        if live:
+            answer = llm("Reply with the single word OK.", max_tokens=8)
+            out.append(("ok", "a test call was answered") if answer is not None else ("FAIL", f"a test call got no answer: {REFLECTOR['why']}"))
+    if (state / "needs-attention").exists():
+        out.append(("FAIL", "the nightly job needs attention: " + " ".join((state / "needs-attention").read_text(encoding="utf-8").split())[:200]
+                    + f" ({state / 'backfill.log'}; remove needs-attention once fixed)"))
+    return out
+
+def doctor_nightly():
+    """Whether tools/install_nightly.sh scheduled the catch-up (launchd on macOS, cron elsewhere) and when it last ran."""
+    if sys.platform == "darwin":
+        plist = Path.home() / "Library" / "LaunchAgents" / f"{NIGHTLY_LABEL}.plist"
+        scheduled, where = plist.exists(), str(plist)
+    else:
+        try: tab = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=10, check=False).stdout
+        except (OSError, subprocess.TimeoutExpired): tab = ""
+        scheduled, where = "nightly_catchup.sh" in tab, "the crontab"
+    if not scheduled:
+        return [("warn", f"not scheduled in {where} (optional: tools/install_nightly.sh catches up what the hooks missed)")]
+    lines = nightly_lines(state_dir())
+    if not lines: return [("warn", f"scheduled in {where}, but no run is logged yet")]
+    last = NIGHTLY_DATE.match(lines[-1])
+    stale = bool(last) and last[1] < (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+    return [("warn" if stale else "ok", f"scheduled in {where}; last: {lines[-1].removeprefix('== ')}"
+             + (" (more than two days ago: is the machine asleep at that hour?)" if stale else ""))]
+
+def cmd_doctor(a):
+    """Check the install end to end and say what to fix. Read-only and lock-free like `status`; exits 1 on any FAIL."""
+    claude_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    claude_json = claude_dir / ".claude.json" if os.environ.get("CLAUDE_CONFIG_DIR") else Path.home() / ".claude.json"
+    checks = [("hooks", doctor_hooks(claude_dir)), ("mcp", doctor_mcp(claude_json)), ("store", doctor_store()),
+              ("lock", doctor_lock()), ("reflector", doctor_reflector(a.live)), ("nightly", doctor_nightly())]
+    failed = 0
+    for name, results in checks:
+        for level, detail in results:
+            print(f"{level:4}  {name:9}  {detail}")
+            failed += level == "FAIL"
+    print(f"{failed} problem(s) to fix" if failed else "nothing to fix")
+    if failed: raise SystemExit(1)
 
 def cmd_vote(a):
     """`memory vote`: add a helpful or harmful vote to a lesson; a harmful vote that takes it below `min_score`, or a second one, archives it at once."""
@@ -1588,6 +1723,9 @@ def main():
     s.set_defaults(f=cmd_remember)
     s = sp.add_parser("status", help="what the store holds and owes, and how the nightly job and the hooks have done (read-only)")
     s.set_defaults(f=cmd_status)
+    s = sp.add_parser("doctor", help="check the hooks, the MCP server, the store, the lock, the Reflector and the schedule (read-only)")
+    s.add_argument("--live", action="store_true", help="also make one small Reflector call, to check the login or the key")
+    s.set_defaults(f=cmd_doctor)
     s = sp.add_parser("vote", help="mark a lesson helpful or harmful; harmful twice archives any lesson, once a lesson with one or two votes")
     s.add_argument("id", help="the lesson's id, as search prints it")
     g = s.add_mutually_exclusive_group(required=True)

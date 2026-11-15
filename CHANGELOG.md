@@ -7,6 +7,14 @@ the journal line format stable.
 
 ## [Unreleased]
 
+### Added
+
+- `memory doctor [--live]`: one read-only check of the install, a line each with `ok`, `warn` or `FAIL` and what to do: the
+  Stop, SubagentStop and SessionStart hooks (listed, runnable, run in the last week), the `memory` MCP server, the database
+  (SQLite's quick check, read-only), the lock (live or a crashed writer's), the Reflector (which one, the nightly job's alert,
+  and with `--live` one call to check the login) and the nightly schedule (launchd or cron, and its last run). Exits 1 on
+  any `FAIL`.
+
 ### Changed
 
 - CI and the release workflow test Python 3.11 too, so every version from the 3.10 floor to 3.13 runs.

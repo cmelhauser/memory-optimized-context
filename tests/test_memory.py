@@ -3035,6 +3035,176 @@ def test_status_on_a_machine_with_no_store_reports_an_empty_one_and_does_not_cre
     assert "0 active lessons in 0 projects" in out and "0 MB" in out and not m.DB.exists()
 
 
+
+# ------------------------------------------------------------------ memory doctor
+
+
+def doctor_home(tmp_path, monkeypatch, settings=None, claude_json=None):
+    """A HOME for `memory doctor` to read: optional ~/.claude/settings.json and ~/.claude.json, a state dir, no crontab."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("MEMORY_STATE_DIR", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(exist_ok=True)
+    if settings is not None: (home / ".claude" / "settings.json").write_text(json.dumps(settings))
+    if claude_json is not None: (home / ".claude.json").write_text(json.dumps(claude_json))
+    return home
+
+
+def hook_scripts(tmp_path):
+    """Executable stand-ins for hooks/compile.sh and hooks/journal.sh, and the settings that run them."""
+    d = tmp_path / "hooks"
+    d.mkdir()
+    for name in ("compile.sh", "journal.sh"):
+        (d / name).write_text("#!/bin/sh\n")
+        (d / name).chmod(0o755)
+    def run(cmd):
+        return [{"hooks": [{"type": "command", "command": cmd}]}]
+    return {"hooks": {"SessionStart": run(f"{d}/compile.sh"), "Stop": run(f"{d}/journal.sh main"), "SubagentStop": run(f"{d}/journal.sh sub")}}
+
+
+def test_doctor_passes_a_complete_install_and_says_nothing_needs_fixing(m, tmp_path, monkeypatch, capsys):
+    home = doctor_home(tmp_path, monkeypatch, hook_scripts(tmp_path), {"mcpServers": {"memory": {"command": "x"}}})
+    (home / "Library" / "LaunchAgents").mkdir(parents=True)
+    (home / "Library" / "LaunchAgents" / f"{m.NIGHTLY_LABEL}.plist").write_text("<plist/>")
+    today = datetime.now().strftime("%Y-%m-%d")
+    (tmp_path / "state" / "backfill.log").write_text(f"== {today} 03:00:00 nightly catch-up finished: everything read\n")
+    (m.ROOT / "hook.log").write_text(f"== {datetime.now(timezone.utc):%Y-%m-%d}T10:00:00Z stop main\n")
+    with m.db() as c:
+        m.upsert(c, "all", "a fact")
+        m.compile_(c)
+    monkeypatch.setattr(m.sys, "platform", "darwin")
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="auto"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(m.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(m, "llm", lambda prompt, max_tokens=0: "OK")
+    m.main.__globals__["sys"].argv = ["memory", "doctor", "--live"]
+    capsys.readouterr()
+    m.main()
+    out = capsys.readouterr().out
+    assert "FAIL" not in out and "warn" not in out and out.rstrip().endswith("nothing to fix")
+    assert "ok    hooks      SessionStart runs" in out and "`memory` is registered" in out and "1 active lessons" in out
+    assert "ok    lock       free" in out and "the SDK, with ANTHROPIC_API_KEY" in out and "a test call was answered" in out
+    assert f"last: {today} 03:00:00 nightly catch-up finished" in out
+
+
+def test_doctor_names_each_thing_to_fix_and_exits_1(m, tmp_path, monkeypatch, capsys):
+    doctor_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(m.sys, "platform", "darwin")
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="auto"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    (tmp_path / "state" / "needs-attention").write_text("2026-10-22 03:00:11\nclaude -p failed: Failed to authenticate\n")
+    m.DB.unlink(missing_ok=True)
+    with pytest.raises(SystemExit) as e:
+        m.cmd_doctor(types.SimpleNamespace(live=False))
+    out = capsys.readouterr().out
+    assert e.value.code == 1 and "4 problem(s) to fix" in out
+    assert "FAIL  hooks      no SessionStart hook" in out and "FAIL  hooks      no Stop hook" in out and "warn  hooks      no SubagentStop" in out
+    assert "warn  mcp        no MCP server named `memory`" in out and "no database at" in out and not m.DB.exists()
+    assert "FAIL  reflector  no Reflector" in out and "needs attention: 2026-10-22 03:00:11 claude -p failed: Failed to authenticate" in out
+    assert "warn  nightly    not scheduled in" in out and "LaunchAgents" in out
+
+
+def test_doctor_reads_claude_config_dir_and_flags_a_hook_script_that_is_gone(m, tmp_path, monkeypatch, capsys):
+    doctor_home(tmp_path, monkeypatch)
+    conf = tmp_path / "conf"
+    conf.mkdir()
+    (conf / "settings.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"command": "~/gone/journal.sh main"}]}]}}))
+    (conf / ".claude.json").write_text(json.dumps({"mcpServers": {"memory": {}}}))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(conf))
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="none"))
+    monkeypatch.setattr(m.sys, "platform", "linux")
+    with pytest.raises(SystemExit):
+        m.cmd_doctor(types.SimpleNamespace(live=False))
+    out = capsys.readouterr().out
+    assert f"Stop runs {tmp_path / 'home' / 'gone' / 'journal.sh'}, which is missing or not executable" in out
+    assert f"`memory` is registered in {conf / '.claude.json'}" in out and "MEMORY_LLM=none" in out
+    assert "no hook run logged" not in out          # a hook that cannot run is the problem to name, not its silence
+
+
+def test_doctor_warns_when_hooks_are_listed_but_have_not_run(m, tmp_path, monkeypatch):
+    doctor_home(tmp_path, monkeypatch)
+    out = m.doctor_hooks(tmp_path / "home" / ".claude")
+    assert out[0][0] == "FAIL"
+    (tmp_path / "home" / ".claude" / "settings.json").write_text(json.dumps(hook_scripts(tmp_path)))
+    out = m.doctor_hooks(tmp_path / "home" / ".claude")
+    assert [lvl for lvl, _ in out] == ["ok", "ok", "ok", "warn"] and "no hook run logged" in out[-1][1]
+
+
+def test_doctor_skips_hook_entries_it_cannot_read(m, tmp_path):
+    for settings in ({}, {"hooks": []}, {"hooks": {"Stop": {}}}, {"hooks": {"Stop": ["x", {"hooks": {}}]}},
+                     {"hooks": {"Stop": [{"hooks": ["x", {"command": 1}, {"type": "command"}]}]}}):
+        assert m.hook_commands(settings, "Stop") == []
+    assert m.hook_commands({"hooks": {"Stop": [{"hooks": [{"command": "a"}, {"command": "b"}]}]}}, "Stop") == ["a", "b"]
+    (tmp_path / "list.json").write_text("[1]")
+    (tmp_path / "bad.json").write_text("{not json")
+    assert m.read_json(tmp_path / "list.json") == {} and m.read_json(tmp_path / "bad.json") == {} and m.read_json(tmp_path / "none") == {}
+
+
+def test_doctor_checks_the_store_opens_and_has_been_compiled(m, tmp_path):
+    with m.db() as c:
+        m.upsert(c, "all", "a fact")
+    out = m.doctor_store()
+    assert out[0][0] == "ok" and "nothing compiled" in out[1][1]
+    m.DB.unlink()
+    m.DB.write_bytes(b"this is not a database" * 100)
+    out = m.doctor_store()
+    assert out[0][0] == "FAIL" and "fails SQLite's quick check" in out[0][1]
+
+
+def test_doctor_tells_a_live_lock_from_a_crashed_writers(m):
+    assert m.doctor_lock() == [("ok", "free")]
+    m.ROOT.mkdir(parents=True, exist_ok=True)
+    m.LOCK.mkdir()
+    m.BREAK.mkdir()
+    assert m.doctor_lock()[0][0] == "ok" and "live writer" in m.doctor_lock()[0][1] and len(m.doctor_lock()) == 1
+    old = time.time() - 3600
+    os.utime(m.LOCK, (old, old))
+    os.utime(m.BREAK, (old, old))
+    out = m.doctor_lock()
+    assert out[0][0] == "warn" and "crashed writer's" in out[0][1] and "died while breaking" in out[1][1]
+    m.BREAK.rmdir()
+    m.LOCK.rmdir()
+    assert m.age_of(m.LOCK) is None
+
+
+def test_doctor_finds_the_cli_and_reports_a_live_call_that_fails(m, tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMORY_STATE_DIR", str(tmp_path / "state"))
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    (fake / "claude").write_text("#!/bin/sh\n")
+    (fake / "claude").chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    assert m.doctor_reflector(False) == [("ok", f"`claude -p` at {fake / 'claude'}; `memory doctor --live` makes one call to check the login")]
+    def no_answer(prompt, max_tokens=0):
+        m.REFLECTOR["why"] = "claude -p failed: Failed to authenticate"     # and no answer: None
+    monkeypatch.setattr(m, "llm", no_answer)
+    assert m.doctor_reflector(True)[1] == ("FAIL", "a test call got no answer: claude -p failed: Failed to authenticate")
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="sdk"))
+    assert m.doctor_reflector(False)[0][0] == "FAIL"          # sdk mode and no key: the CLI on PATH does not count
+
+
+def test_doctor_reads_the_schedule_from_cron_off_macos_and_flags_a_stale_run(m, tmp_path, monkeypatch):
+    doctor_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(m.sys, "platform", "linux")
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    monkeypatch.setenv("PATH", str(fake))
+    assert "not scheduled in the crontab" in m.doctor_nightly()[0][1]          # no crontab command at all
+    (fake / "crontab").write_text("#!/bin/sh\necho '0 3 * * * CALLS=60 /bin/bash /x/tools/nightly_catchup.sh'\n")
+    (fake / "crontab").chmod(0o755)
+    assert m.doctor_nightly() == [("warn", "scheduled in the crontab, but no run is logged yet")]
+    (tmp_path / "state" / "backfill.log").write_text("== 2020-01-01 03:00:00 nightly catch-up finished: everything read\n")
+    out = m.doctor_nightly()[0]
+    assert out[0] == "warn" and "more than two days ago" in out[1]
+    (tmp_path / "state" / "backfill.log").write_text("a nightly catch-up line with no date\n")
+    assert m.doctor_nightly()[0][0] == "ok"
+
+
 def test_a_run_logs_how_many_calls_it_made_and_what_the_cli_said_they_cost(m, tmp_path, monkeypatch, capsys):
     fake = tmp_path / "fakebin"
     fake.mkdir()

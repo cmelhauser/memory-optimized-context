@@ -15,7 +15,7 @@ reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v1.1.4`. 218 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v1.1.4`. 227 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. It has run natively against a real store
@@ -278,6 +278,7 @@ memory search "query" [--project slug] [-k 8] [--all]
 memory remember "fact" --project slug        # refuses a slug that is not a slug, and keeps every line
 memory vote <id> --helpful | --harmful       # exits non-zero if no lesson has that id
 memory status                                # the store, what it owes, the nightly job, the hooks; read-only, no lock
+memory doctor [--live]                       # is the install whole: hooks, MCP, store, lock, Reflector, schedule; exits 1 on a FAIL
 memory ingest [--transcript PATH --project slug] [--export FILE] [--wait SECONDS]
 memory learn [--all [--repos DIR] [--exports DIR]] [--repo PATH [--since DATE]] [--notes DIR [--project slug]]
              [--transcripts] [--transcripts-from DIR] [--export FILE] [--max-calls N]
@@ -288,6 +289,14 @@ memory hook [--role main | sub] [--input FILE] [--project SLUG]   # run by the h
 ```
 
 `memory --help` and `memory COMMAND --help` describe every flag.
+
+`memory doctor` checks the install in one place and prints `ok`, `warn` or `FAIL` with what to do for each: the three hooks
+in `~/.claude/settings.json` (and that their scripts run, and have run in the last week), the `memory` MCP server in
+`~/.claude.json`, that the database passes SQLite's quick check, whether the lock is held by a live writer or left by a
+crashed one, which Reflector would answer and whether the nightly job flagged it, and whether the nightly job is scheduled
+and recent. It honours `CLAUDE_CONFIG_DIR`, writes nothing and takes no lock. It cannot tell an expired `claude -p` login
+from a working one without asking, so `--live` makes one small Reflector call to find out. A missing MCP server, nightly
+job or SubagentStop hook is a `warn`: the tool works without them.
 
 ### Watching the hooks
 
@@ -356,7 +365,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       218 tests, six-process concurrency test included
+tests/test_memory.py       227 tests, six-process concurrency test included
 tools/                     init_store.sh, run_ci_locally.sh, e2e.sh and e2e/, install_nightly.sh, nightly_catchup.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it

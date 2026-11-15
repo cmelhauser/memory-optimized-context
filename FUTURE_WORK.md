@@ -37,12 +37,11 @@ Each item can start as soon as what blocks it is cleared; both need an install t
 - **The release workflow's signing retry.** It shipped in v1.1.2; neither that run nor v1.1.3's needed it. At each release,
   check whether a retry step fired.
 - **Third-party limits.** The Reflector depends on `claude -p` being logged in, or on an API key; when either lapses
-  the nightly job writes `needs-attention` and `memory status` says so.
+  the nightly job writes `needs-attention`, `memory status` says so, and `memory doctor --live` checks it on demand.
 
 ## Ideas, not started
 
 - Retry or back off inside the tool when the Reflector is rate-limited, instead of stopping the run.
-- A `memory doctor` command that checks the hooks, the lock, the login and the schedule in one place.
 
 ## Won't do
 
