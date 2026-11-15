@@ -7,6 +7,17 @@ the journal line format stable.
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-11-15
+
+A patch: the container's Python and the pins are fresh. Nothing in the store's schema, `lid()` or the journal format changed.
+
+### Changed
+
+- The image is built on `python:3.12.16-slim-bookworm` (was 3.12.15), pinned by digest.
+- `docker/login-action` is 4.8.0 in the release workflow.
+- The hashed locks are refreshed (pydantic 2.14.3, sse-starlette 3.7.0, jiter 0.19.0, pylint 4.1.4, ruff 0.17.5 and smaller bumps).
+- `FUTURE_WORK.md`: the signing retry has not fired in the v1.1.2 or v1.1.3 runs.
+
 ## [1.1.3] - 2026-11-04
 
 A patch: the volume upgrade command works, the prose matches the code, and the pins are fresh. Nothing in the store's schema, `lid()` or the journal format changed.

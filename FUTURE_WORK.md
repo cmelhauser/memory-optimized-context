@@ -34,8 +34,8 @@ Each item can start as soon as what blocks it is cleared; both need an install t
 - **The Reflector's output.** Its instructions say status (a merge, a release, a passing run) is not a lesson. Look at a week
   of new lessons for one-off facts that slip through, and tighten `REFLECT_SYS` if they do. Its first forty characters
   detect the Reflector's own transcripts, so they must not change.
-- **The release workflow's signing retry.** It shipped in v1.1.2, whose run passed; at each release, check whether a retry
-  step fired, since it has not yet been seen to.
+- **The release workflow's signing retry.** It shipped in v1.1.2; neither that run nor v1.1.3's needed it. At each release,
+  check whether a retry step fired.
 - **Third-party limits.** The Reflector depends on `claude -p` being logged in, or on an API key; when either lapses
   the nightly job writes `needs-attention` and `memory status` says so.
 
