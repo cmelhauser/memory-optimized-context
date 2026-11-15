@@ -15,7 +15,7 @@ reads at session start, and never lets two processes write the same file.
 
 ## Current status
 
-`v1.1.4`. 227 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
+`v1.1.4`. 230 tests, coverage 100 per cent of lines and branches on `bin/memory` and the tools CI
 uses, six-process concurrency test green.
 The image is built and smoke-tested on arm64, CI builds it on amd64, and `tools/e2e.sh` runs
 both installs end to end against a fake Reflector. It has run natively against a real store
@@ -216,6 +216,10 @@ part-way with work done, run it again to carry on, **2** the Reflector answered 
 so running it again will not help until whatever it reported is fixed. An expired `claude` login
 reads as 2.
 
+A call that is rate-limited, or meets an overloaded API (HTTP 429 or 529), is not a stop: it is tried again after 30 s
+and after 120 s more, with a log line each time, and only a third refusal ends the run. A usage or spend limit lasts hours,
+so it stops the run at once, as above.
+
 `--max-calls N` caps one run at N Reflector calls, counting each one where it is made: a
 reflection, and a contradiction check for up to eight new lessons that have neighbours worth comparing them against. The run stops the same way, so a
 first backfill can be spread out, for example `learn --transcripts --max-calls 60` every few hours.
@@ -365,7 +369,7 @@ bin/memory                 the tool, one file
 hooks/                     Claude Code hook scripts, the runner they share, the settings.json snippet
 examples/                  prompt and config snippets for claude.ai, CLAUDE.md, Claude Desktop
 eval/                      recall@k harness and an example question set
-tests/test_memory.py       227 tests, six-process concurrency test included
+tests/test_memory.py       230 tests, six-process concurrency test included
 tools/                     init_store.sh, run_ci_locally.sh, e2e.sh and e2e/, install_nightly.sh, nightly_catchup.sh, check_docs.py, eval_recall.py
 docs/architecture.md       the system as built
 docs/concurrency.md        every race considered and the test that closes it

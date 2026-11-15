@@ -17,6 +17,9 @@ the journal line format stable.
 
 ### Changed
 
+- A Reflector call that is rate-limited or meets an overloaded API (429, 529, `rate_limit_error`, `overloaded_error`) is
+  tried again after 30 s and 120 s instead of stopping the run; a usage or spend limit, a refused login or any other
+  failure still stops it at once.
 - CI and the release workflow test Python 3.11 too, so every version from the 3.10 floor to 3.13 runs.
 
 ## [1.1.4] - 2026-11-15

@@ -269,6 +269,11 @@ def score(r, now_ts=None):
 REFLECTOR = {"why": ""}   # why the last call gave no answer, so a stop can say it instead of "the log line above says why"
 CLI_TIMEOUT = 180         # seconds one `claude -p` call may take
 CLI_TRIES = 2             # a timed-out call is tried this many times; a refusal or a usage limit is not retried
+RATE_WAITS = (30, 120)    # seconds to wait before each retry of a call that was rate-limited or met an overloaded API
+# What a passing limit looks like in the SDK's error or the CLI's result: HTTP 429 and 529, the API's `rate_limit_error`
+# and `overloaded_error`. A usage or spend limit ("usage limit reached", "credit balance") lasts hours, so it is not here:
+# that run stops, and the next carries on from its cursors.
+RATE_LIMITED = re.compile(r"rate[ _-]?limit|overloaded|too many requests|\b(?:429|529)\b", re.I)
 # The Reflector reads, and only reads. `claude -p` is an agent: given a transcript of another agent's task, it carried
 # the task out with its tools, ran past the timeout every night on the same window, and stalled every backfill behind
 # it; and text in a transcript could make it act on this machine. So it gets no tools and no MCP servers, its
@@ -291,8 +296,23 @@ def cli_reason(r):
     return (r.stderr or r.stdout or "no output").strip()[:300]
 
 def llm(prompt, system="You are a precise assistant. Output only what is asked.", max_tokens=1500):
-    """Returns text, or None when no answer came. Order: SDK (ANTHROPIC_API_KEY) → `claude -p` CLI (uses your
-    subscription). A failure is logged and returned as None, never raised; reflect() turns it into ReflectorFailed."""
+    """Returns text, or None when no answer came, as `llm_once` does, but a call that was rate-limited or met an
+    overloaded API is tried again after each of RATE_WAITS, so a limit that passes in a minute or two does not end a
+    run that has been reading for hours. Any other failure is returned at once. A Stop hook asks with no lock held,
+    and a `learn` keeps its lock fresh while it waits."""
+    retries = 0
+    while True:
+        REFLECTOR["why"] = ""                 # so a stale reason from an earlier call cannot pass for this one's
+        answer = llm_once(prompt, system, max_tokens)
+        if answer is not None or retries == len(RATE_WAITS) or not RATE_LIMITED.search(REFLECTOR["why"]): return answer
+        wait, retries = RATE_WAITS[retries], retries + 1
+        log(f"the Reflector is rate-limited; trying again in {wait} s ({retries} of {len(RATE_WAITS)})")
+        time.sleep(wait)
+
+def llm_once(prompt, system, max_tokens):
+    """One attempt. Returns text, or None when no answer came. Order: SDK (ANTHROPIC_API_KEY) → `claude -p` CLI (uses
+    your subscription). A failure is logged, kept in REFLECTOR["why"] and returned as None, never raised; reflect()
+    turns it into ReflectorFailed."""
     mode = CFG["llm"]
     if mode == "none": return None
     prompt = scrub(prompt)

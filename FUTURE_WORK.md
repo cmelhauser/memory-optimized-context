@@ -41,7 +41,8 @@ Each item can start as soon as what blocks it is cleared; both need an install t
 
 ## Ideas, not started
 
-- Retry or back off inside the tool when the Reflector is rate-limited, instead of stopping the run.
+None open: `memory doctor`, the Reflector's rate-limit retry and Python 3.11 in CI were the last three, and are
+in `CHANGELOG.md` under Unreleased.
 
 ## Won't do
 

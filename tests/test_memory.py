@@ -1040,6 +1040,7 @@ def test_llm_answers_none_on_sdk_errors_cli_errors_and_timeouts(tmp_path, monkey
     monkeypatch.setitem(sys.modules, "anthropic", fake)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     m = load(tmp_path / "r", monkeypatch, MEMORY_LLM="sdk")
+    monkeypatch.setattr(m, "RATE_WAITS", ())           # one try each: the retry has tests of its own
     assert m.llm("x") is None
     fakebin = tmp_path / "fakebin"
     fakebin.mkdir()
@@ -3203,6 +3204,50 @@ def test_doctor_reads_the_schedule_from_cron_off_macos_and_flags_a_stale_run(m, 
     assert out[0] == "warn" and "more than two days ago" in out[1]
     (tmp_path / "state" / "backfill.log").write_text("a nightly catch-up line with no date\n")
     assert m.doctor_nightly()[0][0] == "ok"
+
+
+def counting_claude(tmp_path, monkeypatch, failures, reason):
+    """A `claude` on PATH that fails its first `failures` calls with `reason` (no single quotes), then answers "[]";
+    returns the file it logs each call to."""
+    fake, calls = tmp_path / "fakebin", tmp_path / "calls"
+    fake.mkdir()
+    bad = json.dumps({"is_error": True, "subtype": "success", "result": reason})
+    (fake / "claude").write_text(f"""#!/bin/sh
+cat >/dev/null
+echo x >> {calls}
+if [ "$(wc -l < {calls})" -le {failures} ]; then printf '%s' '{bad}'; exit 1; fi
+printf '%s' '{{"is_error":false,"subtype":"success","result":"[]"}}'
+""")
+    (fake / "claude").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    return calls
+
+
+def test_a_rate_limited_call_waits_and_is_tried_again(m, tmp_path, monkeypatch, capsys):
+    calls = counting_claude(tmp_path, monkeypatch, 2, "API Error: 429 rate_limit_error")
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    monkeypatch.setattr(m, "RATE_WAITS", (0, 0))
+    assert m.llm("q") == "[]" and len(calls.read_text().splitlines()) == 3
+    err = capsys.readouterr().err
+    assert "rate-limited; trying again in 0 s (1 of 2)" in err and "(2 of 2)" in err
+
+
+def test_a_limit_that_does_not_pass_ends_the_call_after_the_last_wait(m, tmp_path, monkeypatch):
+    calls = counting_claude(tmp_path, monkeypatch, 99, "Overloaded")
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    monkeypatch.setattr(m, "RATE_WAITS", (0, 0))
+    assert m.llm("q") is None and len(calls.read_text().splitlines()) == 3 and "Overloaded" in m.REFLECTOR["why"]
+
+
+def test_a_login_or_usage_failure_is_not_retried(m, tmp_path, monkeypatch):
+    calls = counting_claude(tmp_path, monkeypatch, 99, "Claude AI usage limit reached|1760000000")
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="cli"))
+    monkeypatch.setattr(m, "RATE_WAITS", (0, 0))
+    assert m.llm("q") is None and len(calls.read_text().splitlines()) == 1
+    m.REFLECTOR["why"] = "rate limit, from an earlier call"
+    monkeypatch.setattr(m, "CFG", dict(m.CFG, llm="none"))
+    assert m.llm("q") is None and m.REFLECTOR["why"] == ""         # a stale reason is not this call's, and is not retried
 
 
 def test_a_run_logs_how_many_calls_it_made_and_what_the_cli_said_they_cost(m, tmp_path, monkeypatch, capsys):
