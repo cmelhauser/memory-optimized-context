@@ -94,7 +94,7 @@ the Human Author asking for it.** Tagging is the routine act; publishing is not.
 ## For agents
 
 - Never commit to `main`. Branch, open a pull request, let CI run.
-- A pull request's CI run is the whole verdict (lint, Python 3.10, 3.12 and 3.13, the image),
+- A pull request's CI run is the whole verdict (lint, Python 3.10 to 3.13, the image),
   but it does not start the image's default command or exercise the hooks end to end: run
   `tools/e2e.sh` before merging anything that touches the hooks, the Dockerfile, the Compose
   file or the Reflector, and before every release.

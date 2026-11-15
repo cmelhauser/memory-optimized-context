@@ -8,8 +8,8 @@ name: CI
 # catches defects rather than restyling code; ruff.toml lists the rules, and .pylintrc holds pylint to 10.00. The documentation check
 # (tools/check_docs.py) runs inside pytest, so a stale count in the README fails the unit tests.
 #
-# `unit-tests` runs pytest on the floor the tool declares (3.10), the Python the Docker image runs (3.12) and
-# the newest (3.13). 3.11 lies between two of them and has never failed alone. The coverage gate in .coveragerc
+# `unit-tests` runs pytest on every Python from the floor the tool declares (3.10) to the newest (3.13); 3.12 is
+# the one the Docker image runs. The coverage gate in .coveragerc
 # is measured once, on 3.12: the code is the same on every version, and tracing slows the others.
 #
 # `container` builds the image and runs the CLI in it, with buildx and the Actions layer cache: measured, that
@@ -71,7 +71,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 

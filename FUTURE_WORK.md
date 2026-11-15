@@ -43,7 +43,6 @@ Each item can start as soon as what blocks it is cleared; both need an install t
 
 - Retry or back off inside the tool when the Reflector is rate-limited, instead of stopping the run.
 - A `memory doctor` command that checks the hooks, the lock, the login and the schedule in one place.
-- Python 3.11 in the CI matrix (3.10, 3.12 and 3.13 run today; 3.11 sits between the floor and the image's version).
 
 ## Won't do
 

@@ -7,6 +7,10 @@ the journal line format stable.
 
 ## [Unreleased]
 
+### Changed
+
+- CI and the release workflow test Python 3.11 too, so every version from the 3.10 floor to 3.13 runs.
+
 ## [1.1.4] - 2026-11-15
 
 A patch: the container's Python and the pins are fresh. Nothing in the store's schema, `lid()` or the journal format changed.
