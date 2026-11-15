@@ -7,6 +7,11 @@ the journal line format stable.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-15
+
+A minor release: a new `memory doctor` command, a Reflector that waits out a rate limit, and Python 3.11 in CI. Nothing in
+the store's schema, `lid()` or the journal format changed.
+
 ### Added
 
 - `memory doctor [--live]`: one read-only check of the install, a line each with `ok`, `warn` or `FAIL` and what to do: the
@@ -21,6 +26,7 @@ the journal line format stable.
   tried again after 30 s and 120 s instead of stopping the run; a usage or spend limit, a refused login or any other
   failure still stops it at once.
 - CI and the release workflow test Python 3.11 too, so every version from the 3.10 floor to 3.13 runs.
+- The image's numpy is 2.5.5.
 
 ## [1.1.4] - 2026-11-15
 

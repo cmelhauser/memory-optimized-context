@@ -42,7 +42,7 @@ Each item can start as soon as what blocks it is cleared; both need an install t
 ## Ideas, not started
 
 None open: `memory doctor`, the Reflector's rate-limit retry and Python 3.11 in CI were the last three, and are
-in `CHANGELOG.md` under Unreleased.
+in 1.2.0.
 
 ## Won't do
 
